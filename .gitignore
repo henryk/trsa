@@ -14,3 +14,7 @@ install-sh
 libtool
 ltmain.sh
 missing
+.libs
+*.o
+*.la
+*.lo
