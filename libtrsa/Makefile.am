@@ -15,5 +15,5 @@ libtrsa_la_LDFLAGS =
 
 # Compiler options. Here we are adding the include directory
 # to be searched for headers included in the source code.
-libtrsa_la_CPPFLAGS = -I$(top_srcdir)/include
+libtrsa_la_CPPFLAGS = -Wall -pedantic -Werror -I$(top_srcdir)/include
 
