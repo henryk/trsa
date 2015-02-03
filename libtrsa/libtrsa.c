@@ -7,9 +7,12 @@
 
 #define PRIME_GENERATION_RETRIES 100
 #define DEFAULT_PUBLIC_EXPONENT 3
+#define SECONDARY_SECURITY_PARAMETER 3 /* FIXME Increase to 128 */
 
 struct trsa_context {
 	mpz_t p, q, n, e, d;
+	mpz_t *s;
+	int t, l;
 };
 
 trsa_ctx trsa_init ()
@@ -70,6 +73,22 @@ abort:
 	return retval;
 }
 
+static void evaluate_poly(mpz_t rop, mpz_t *c, unsigned int order, unsigned long int x)
+{
+	mpz_t tmp;
+	mpz_init(tmp);
+
+	mpz_set_ui(rop, 0);
+
+	for(int i=0; i<=order; i++) {
+		mpz_set_ui(tmp, x);
+		mpz_pow_ui(tmp, tmp, i);
+		mpz_addmul(rop, c[i], tmp);
+	}
+
+	mpz_clear(tmp);
+}
+
 int trsa_key_generate(trsa_ctx ctx, unsigned int numbits, unsigned int t, unsigned int l)
 {
 	if(!ctx) {
@@ -81,10 +100,16 @@ int trsa_key_generate(trsa_ctx ctx, unsigned int numbits, unsigned int t, unsign
 	int qlength = numbits/2;
 	int plength = numbits - qlength;
 	gmp_randstate_t rnd;
-	mpz_t phi_n, pminus, qminus, delta, tmp, tmp2;
+	mpz_t phi_n, pminus, qminus, delta, c_max, tmp, tmp2;
+	mpz_t *c = NULL;
+
+	ctx->t = t;
+	ctx->l = l;
+	ctx->s = NULL;
+	// FIXME: Guard against memory leak in case of repeated calls
 
 	gmp_randinit_default(rnd);
-	mpz_inits(phi_n, pminus, qminus, delta, tmp, tmp2, NULL);
+	mpz_inits(phi_n, pminus, qminus, delta, c_max, tmp, tmp2, NULL);
 
 	mpz_urandomb(ctx->p, rnd, plength);
 	mpz_urandomb(ctx->q, rnd, qlength);
@@ -156,6 +181,42 @@ int trsa_key_generate(trsa_ctx ctx, unsigned int numbits, unsigned int t, unsign
 
 	mpz_invert(ctx->d, ctx->e, phi_n);
 
+	mpz_set(c_max, delta);
+	mpz_mul(c_max, c_max, ctx->n);
+	mpz_mul_2exp(c_max, c_max, t);
+	mpz_mul_2exp(c_max, c_max, SECONDARY_SECURITY_PARAMETER);
+
+
+	c = calloc(t+1, sizeof(*c));
+	if(c == NULL) {
+		goto abort;
+	}
+
+	mpz_init(c[0]);
+	for(int i=1; i<=t; i++) {
+		mpz_init(c[i]);
+	}
+
+	mpz_set(c[0], ctx->d);
+	for(int i=1; i<=t; i++) {
+		mpz_urandomm(c[i], rnd, c_max);
+	}
+
+	ctx->s = calloc(l, sizeof(*ctx->s));
+	if(ctx->s == NULL) {
+		goto abort;
+	}
+
+	for(int i=0; i<l; i++) {
+		mpz_init(ctx->s[i]);
+	}
+
+	for(int i=1; i<=l; i++) {
+		evaluate_poly(ctx->s[i-1], c, t, i);
+	}
+
+	// FIXME Generate verification values
+
 	// FIXME Debugging start
 	printf("q: "); mpz_out_str(stdout, 10, ctx->q); printf("\n");
 	printf("p: "); mpz_out_str(stdout, 10, ctx->p); printf("\n");
@@ -163,13 +224,32 @@ int trsa_key_generate(trsa_ctx ctx, unsigned int numbits, unsigned int t, unsign
 	printf("phi_n: "); mpz_out_str(stdout, 10, phi_n); printf("\n");
 	printf("e: "); mpz_out_str(stdout, 10, ctx->e); printf("\n");
 	printf("d: "); mpz_out_str(stdout, 10, ctx->d); printf("\n");
+	for(int i=0; i<=t; i++) {
+		printf("c_%i: ", i); mpz_out_str(stdout, 10, c[i]); printf("\n");
+	}
+	for(int i=1; i<=l; i++) {
+		printf("s_%i: ", i); mpz_out_str(stdout, 10, ctx->s[i-1]); printf("\n");
+	}
 	// FIXME Debugging end
 
 	retval = 0;
 
 abort:
 	gmp_randclear(rnd);
-	mpz_clears(phi_n, pminus, qminus, delta, tmp, tmp2, NULL);
+	mpz_clears(phi_n, pminus, qminus, delta, c_max, tmp, tmp2, NULL);
+	if(c != NULL) {
+		for(int i=0; i<=t; i++) {
+			mpz_clear(c[i]);
+		}
+	}
+	free(c);
+
+	if(ctx->s != NULL && retval < 0) {
+		for(int i=0; i<l; i++) {
+			mpz_clear(ctx->s[i]);
+		}
+		free(ctx->s);
+	}
 
 	return retval;
 }
@@ -183,6 +263,13 @@ int trsa_fini(trsa_ctx ctx)
 
 
 	mpz_clears(ctx->p, ctx->q, ctx->n, ctx->e, ctx->d, NULL);
+
+	if(ctx->s != NULL) {
+		for(int i=0; i<ctx->l; i++) {
+			mpz_clear(ctx->s[i]);
+		}
+		free(ctx->s);
+	}
 
 	/* FIXME: Check if cleaning up actually destroys memory */
 	free(ctx);
