@@ -20,7 +20,7 @@
 #include <string.h>
 
 #define FAIL(x) do { fprintf(stderr, x "\n"); goto abort; } while(0)
-#define NUMBITS 20
+#define NUMBITS 10
 #define SHARES_TOTAL 5
 #define SHARES_NEEDED 3
 
