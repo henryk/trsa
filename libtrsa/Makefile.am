@@ -8,7 +8,7 @@ lib_LTLIBRARIES = libtrsa.la
 # Build information for each library
 
 # Sources for libtrsa
-libtrsa_la_SOURCES = libtrsa.c
+libtrsa_la_SOURCES = libtrsa.c buffer.c
 
 # Linker options libTestProgram
 libtrsa_la_LDFLAGS = 

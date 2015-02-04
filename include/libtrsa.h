@@ -11,7 +11,7 @@ extern int trsa_fini(trsa_ctx ctx);
 
 extern int trsa_key_generate(trsa_ctx ctx, unsigned int numbits, unsigned int t, unsigned int l);
 
-extern int trsa_share_get(trsa_ctx ctx, unsigned int i, uint8_t *data, size_t *data_length);
+extern int trsa_share_get(trsa_ctx ctx, unsigned int i, uint8_t **data, size_t *data_length);
 extern int trsa_share_set(trsa_ctx ctx, const uint8_t *data, size_t data_length);
 
 extern int trsa_encrypt_generate(trsa_ctx ctx,

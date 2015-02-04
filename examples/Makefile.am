@@ -22,4 +22,4 @@ example_SOURCES= example.c
 example_LDFLAGS = $(top_srcdir)/libtrsa/libtrsa.la
 
 # Compiler options for a.out
-example_CPPFLAGS = -I$(top_srcdir)/include
+example_CPPFLAGS = -Wall -pedantic -Werror -I$(top_srcdir)/include

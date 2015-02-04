@@ -28,7 +28,7 @@ static int copy_share(trsa_ctx source, trsa_ctx destination, int i) {
 	uint8_t *data = NULL;
 	size_t data_length = 0;
 
-	int retval = trsa_share_get(source, i, data, &data_length);
+	int retval = trsa_share_get(source, i, &data, &data_length);
 	if(retval < 0)
 		FAIL("trsa_share_get() failed");
 
