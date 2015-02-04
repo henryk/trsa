@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <string.h>
 #include <stdio.h> // FIXME Debugging
 
 #include <gmp.h>
@@ -11,12 +12,13 @@
 #define SECONDARY_SECURITY_PARAMETER 3 /* FIXME Increase to 128 */
 
 #define MAGIC_SIZE 8
-#define MAGIC_SHARE "TRSAs\r\n\x00"
+#define MAGIC_SHARE   "TRSAs\r\n\x00"
+#define MAGIC_PUBKEY  "TRSAp\r\n\x00"
 
 struct trsa_context {
 	mpz_t p, q, n, e, d;
-	mpz_t *s;
-	int t, l;
+	mpz_t *s, my_s;
+	int t, l, my_i;
 };
 
 trsa_ctx trsa_init ()
@@ -26,7 +28,7 @@ trsa_ctx trsa_init ()
 		return NULL;
 	}
 
-	mpz_inits(ctx->p, ctx->q, ctx->n, ctx->e, ctx->d, NULL);
+	mpz_inits(ctx->p, ctx->q, ctx->n, ctx->e, ctx->d, ctx->my_s, NULL);
 
 
 	return ctx;
@@ -266,7 +268,7 @@ int trsa_fini(trsa_ctx ctx)
 	}
 
 
-	mpz_clears(ctx->p, ctx->q, ctx->n, ctx->e, ctx->d, NULL);
+	mpz_clears(ctx->p, ctx->q, ctx->n, ctx->e, ctx->d, ctx->my_s, NULL);
 
 	if(ctx->s != NULL) {
 		for(int i=0; i<ctx->l; i++) {
@@ -286,6 +288,21 @@ static int dump_magic(buffer_t b, const char *magic)
 {
 	return buffer_put_bytes(b, (const uint8_t*)magic, MAGIC_SIZE);
 }
+
+static int verify_magic(buffer_t b, const char *magic)
+{
+	const uint8_t *data;
+
+	int r = buffer_get_bytes(b, &data, MAGIC_SIZE);
+	if(r < 0) return r;
+
+	if(memcmp(data, magic, MAGIC_SIZE) != 0) {
+		return -1;
+	}
+
+	return 0;
+}
+
 
 static size_t estimate_size_mpz(mpz_t op)
 {
@@ -317,6 +334,29 @@ abort:
 	return retval;
 }
 
+static int read_mpz(buffer_t b, mpz_t rop)
+{
+	int retval = -1;
+	uint16_t data_length = 0;
+	const uint8_t *data = NULL;;
+
+	int r = buffer_get_uint16(b, &data_length);
+	ABORT_IF_ERROR(r);
+
+	r = buffer_get_bytes(b, &data, data_length);
+	ABORT_IF_ERROR(r);
+
+	mpz_import(rop, data_length, 1, 1, 1, 0, data);
+
+	// Note: sign is not restored. Are all values positive?
+
+	retval = 0;
+
+abort:
+	return retval;
+}
+
+
 static size_t estimate_size_public(trsa_ctx ctx)
 {
 	return estimate_size_mpz(ctx->n) + estimate_size_mpz(ctx->e);
@@ -327,6 +367,15 @@ static int dump_public(buffer_t b, trsa_ctx ctx)
 	int r = dump_mpz(b, ctx->n);
 	if(r < 0) return r;
 	r = dump_mpz(b, ctx->e);
+	if(r < 0) return r;
+	return 0;
+}
+
+static int read_public(buffer_t b, trsa_ctx ctx)
+{
+	int r = read_mpz(b, ctx->n);
+	if(r < 0) return r;
+	r = read_mpz(b, ctx->e);
 	if(r < 0) return r;
 	return 0;
 }
@@ -345,7 +394,7 @@ int trsa_share_get(trsa_ctx ctx, unsigned int i, uint8_t **data, size_t *data_le
 		return -1;
 	}
 
-	// Write out public parameters, followed by private share parameter ctx->s[i-1]
+	// Write out public parameters, followed by private share parameters i, ctx->s[i-1]
 	int retval = -1;
 	size_t size_estimate = MAGIC_SIZE;
 	size_estimate += estimate_size_public(ctx);
@@ -362,6 +411,9 @@ int trsa_share_get(trsa_ctx ctx, unsigned int i, uint8_t **data, size_t *data_le
 	r = dump_public(buffer, ctx);
 	ABORT_IF_ERROR(r);
 
+	r = buffer_put_uint16(buffer, i);  // FIXME: range of i
+	ABORT_IF_ERROR(r);
+
 	r = dump_mpz(buffer, ctx->s[i-1]);
 	ABORT_IF_ERROR(r);
 
@@ -374,7 +426,40 @@ abort:
 	return retval;
 }
 
-int trsa_share_set(trsa_ctx ctx, const uint8_t *data, size_t data_length) { return -1; }
+int trsa_share_set(trsa_ctx ctx, const uint8_t *data, size_t data_length) {
+	if(!ctx || !data || !data_length) {
+		return -1;
+	}
+
+	// Read in public parameters, followed by private share parameters my_i, ctx->my_s
+	int retval = -1;
+
+	buffer_t buffer = buffer_init(data, data_length);
+	if(!buffer) {
+		goto abort;
+	}
+
+	int r = verify_magic(buffer, MAGIC_SHARE);
+	ABORT_IF_ERROR(r);
+
+	r = read_public(buffer, ctx);
+	ABORT_IF_ERROR(r);
+
+	uint16_t i;
+	r = buffer_get_uint16(buffer, &i);
+	ABORT_IF_ERROR(r);
+	ctx->my_i = i;
+
+	r = read_mpz(buffer, ctx->my_s);
+	ABORT_IF_ERROR(r);
+
+	retval = 0;
+
+abort:
+	buffer_free(buffer);
+
+	return retval;
+}
 
 int trsa_encrypt_generate(trsa_ctx ctx,
 		uint8_t *session_key, size_t session_key_length,
@@ -394,5 +479,63 @@ int trsa_decrypt_contribute(trsa_ctx ctx,
 int trsa_decrypt_finish(trsa_ctx ctx,
 		uint8_t *session_key, size_t *session_key_length) { return -1; }
 
-int trsa_pubkey_get(trsa_ctx ctx, uint8_t *data, size_t *data_length) { return -1; }
-int trsa_pubkey_set(trsa_ctx ctx, const uint8_t *data, size_t data_length) { return -1; }
+int trsa_pubkey_get(trsa_ctx ctx, uint8_t **data, size_t *data_length) {
+	if(!ctx || !data || !data_length) {
+		return -1;
+	}
+
+	if(*data || *data_length) {
+		return -1; // Not implemented yet
+	}
+
+	// Write out public parameters
+	int retval = -1;
+	size_t size_estimate = MAGIC_SIZE;
+	size_estimate += estimate_size_public(ctx);
+
+	buffer_t buffer = buffer_alloc(size_estimate);
+	if(!buffer) {
+		goto abort;
+	}
+
+	int r = dump_magic(buffer, MAGIC_PUBKEY);
+	ABORT_IF_ERROR(r);
+
+	r = dump_public(buffer, ctx);
+	ABORT_IF_ERROR(r);
+
+	buffer_give_up(&buffer, data, data_length);
+	retval = 0;
+
+abort:
+	buffer_free(buffer);
+
+	return retval;
+}
+
+int trsa_pubkey_set(trsa_ctx ctx, const uint8_t *data, size_t data_length) {
+	if(!ctx || !data || !data_length) {
+		return -1;
+	}
+
+	// Read in public parameters
+	int retval = -1;
+
+	buffer_t buffer = buffer_init(data, data_length);
+	if(!buffer) {
+		goto abort;
+	}
+
+	int r = verify_magic(buffer, MAGIC_PUBKEY);
+	ABORT_IF_ERROR(r);
+
+	r = read_public(buffer, ctx);
+	ABORT_IF_ERROR(r);
+
+	retval = 0;
+
+abort:
+	buffer_free(buffer);
+
+	return retval;
+}

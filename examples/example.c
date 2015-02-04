@@ -45,7 +45,7 @@ static int copy_pubkey(trsa_ctx source, trsa_ctx destination) {
 	uint8_t *data = NULL;
 	size_t data_length = 0;
 
-	int retval = trsa_pubkey_get(source, data, &data_length);
+	int retval = trsa_pubkey_get(source, &data, &data_length);
 	if(retval < 0)
 		FAIL("trsa_pubkey_get() failed");
 
