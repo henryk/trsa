@@ -19,6 +19,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "gmp.h" // FIXME Test code
+
 #define FAIL(x) do { fprintf(stderr, x "\n"); goto abort; } while(0)
 #define NUMBITS 10
 #define SHARES_TOTAL 5
@@ -64,7 +66,7 @@ static int contribute_partial(trsa_ctx source, trsa_ctx destination,
 	size_t response_length = 0;
 
 	int retval = trsa_decrypt_partial(source, challenge, challenge_length,
-			response, &response_length);
+			&response, &response_length);
 	if(retval < 0)
 		FAIL("trsa_decrypt_partial() failed");
 
@@ -92,6 +94,10 @@ int main(void) {
 	uint8_t *challenge = NULL;
 	size_t challenge_length = 0;
 
+	mpz_t x, x_[3], y, y_; 	// FIXME test code
+	mpz_inits(x, x_[0], x_[1], x_[2], y, y_, NULL);
+
+
 	while(*ctx_ptr) {
 		**ctx_ptr = trsa_init();
 		if(!**ctx_ptr)
@@ -111,13 +117,48 @@ int main(void) {
 
 	if(copy_pubkey(dealer, encryptor) < 0)
 		FAIL("copy_pubkey() failed");
+	if(copy_pubkey(dealer, decryptor) < 0)
+		FAIL("copy_pubkey() failed");
+
+
+	// FIXME test code
+	mpz_set_ui(y, 31); // y: Clear text
+
+	if(trsa_op_pub(encryptor, y, x) < 0)  // x: Encrypted
+		FAIL("trsa_op_pub() failed");
+
+	if(trsa_op_partial(participant_1, x, x_[0]) < 0)
+		FAIL("trsa_op_partial(1, ...) failed");
+
+	if(trsa_op_partial(participant_3, x, x_[1]) < 0)
+		FAIL("trsa_op_partial(3, ...) failed");
+
+	if(trsa_op_partial(participant_4, x, x_[2]) < 0)
+		FAIL("trsa_op_partial(4, ...) failed");
+
+	if(trsa_op_combine_set(decryptor, 1, x_[0]) < 0)
+		FAIL("trsa_op_combine_set(1, ...) failed");
+
+	if(trsa_op_combine_set(decryptor, 3, x_[1]) < 0)
+		FAIL("trsa_op_combine_set(3, ...) failed");
+
+	if(trsa_op_combine_set(decryptor, 4, x_[2]) < 0)
+		FAIL("trsa_op_combine_set(4, ...) failed");
+
+	if(trsa_op_combine_do(decryptor, x, y_) < 0)  // y_: Decrypted
+		FAIL("trsa_op_combine_do() failed");
+
+	if(mpz_cmp(y, y_) != 0)
+		FAIL("y != y'");
+
 
 	if(trsa_encrypt_generate(encryptor, session_key, sizeof(session_key),
-			encrypted_session_key, &encrypted_session_key_length) < 0)
+			&encrypted_session_key, &encrypted_session_key_length) < 0)
 		FAIL("trsa_encrypt_generate() failed");
 
+
 	if(trsa_decrypt_prepare(decryptor, encrypted_session_key,
-			encrypted_session_key_length, challenge, &challenge_length) < 0)
+			encrypted_session_key_length, &challenge, &challenge_length) < 0)
 		FAIL("trsa_decrypt_prepare() failed");
 
 	if(contribute_partial(participant_1, decryptor, challenge, challenge_length)
@@ -130,7 +171,7 @@ int main(void) {
 			< 0)
 		FAIL("contribute_partial(...,4) failed");
 
-	if(trsa_decrypt_finish(decryptor, restored_session_key,
+	if(trsa_decrypt_finish(decryptor, &restored_session_key,
 			&restored_session_key_length) < 0)
 		FAIL("trsa_decrypt_finish() failed");
 
@@ -150,5 +191,6 @@ int main(void) {
 	}
 	free(encrypted_session_key);
 	free(restored_session_key);
+	mpz_clears(x, x_[0], x_[1], x_[2], y, y_, NULL); // FIXME Test code
 	return retval;
 }

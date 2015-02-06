@@ -15,7 +15,7 @@ extern int trsa_share_get(trsa_ctx ctx, unsigned int i, uint8_t **data, size_t *
 extern int trsa_share_set(trsa_ctx ctx, const uint8_t *data, size_t data_length);
 
 extern int trsa_encrypt_generate(trsa_ctx ctx,
-		uint8_t **session_key, size_t *session_key_length,
+		uint8_t *session_key, size_t session_key_length,
 		uint8_t **encrypted_session_key, size_t *encrypted_session_key_length);
 
 extern int trsa_decrypt_prepare(trsa_ctx ctx,
@@ -41,6 +41,6 @@ extern int trsa_op_pub(trsa_ctx ctx, mpz_t in, mpz_t out);
 
 extern int trsa_op_partial(trsa_ctx ctx, mpz_t in, mpz_t out);
 extern int trsa_op_combine_set(trsa_ctx ctx, unsigned int i, mpz_t in);
-extern int trsa_op_combine_do(trsa_ctx ctx, mpz_t out);
+extern int trsa_op_combine_do(trsa_ctx ctx, mpz_t in, mpz_t out);
 
 #endif

@@ -17,7 +17,7 @@
 
 struct trsa_context {
 	mpz_t p, q, n, e, d;
-	mpz_t *s, my_s;
+	mpz_t *s, *x_, my_s;
 	int t, l, my_i;
 };
 
@@ -277,6 +277,13 @@ int trsa_fini(trsa_ctx ctx)
 		free(ctx->s);
 	}
 
+	if(ctx->x_ != NULL) {
+		for(int i=0; i<ctx->l; i++) {
+			mpz_clear(ctx->x_[i]);
+		}
+		free(ctx->x_);
+	}
+
 	/* FIXME: Check if cleaning up actually destroys memory */
 	free(ctx);
 	return 0;
@@ -359,12 +366,15 @@ abort:
 
 static size_t estimate_size_public(trsa_ctx ctx)
 {
-	return estimate_size_mpz(ctx->n) + estimate_size_mpz(ctx->e);
+	return 2 + estimate_size_mpz(ctx->n) + estimate_size_mpz(ctx->e);
 }
 
 static int dump_public(buffer_t b, trsa_ctx ctx)
 {
-	int r = dump_mpz(b, ctx->n);
+	if(ctx->l > 65535) return -1;
+	int r = buffer_put_uint16(b, ctx->l);
+	if(r < 0) return r;
+	r = dump_mpz(b, ctx->n);
 	if(r < 0) return r;
 	r = dump_mpz(b, ctx->e);
 	if(r < 0) return r;
@@ -373,7 +383,11 @@ static int dump_public(buffer_t b, trsa_ctx ctx)
 
 static int read_public(buffer_t b, trsa_ctx ctx)
 {
-	int r = read_mpz(b, ctx->n);
+	uint16_t tmp;
+	int r = buffer_get_uint16(b, &tmp);
+	if(r < 0) return r;
+	ctx->l = tmp;
+	r = read_mpz(b, ctx->n);
 	if(r < 0) return r;
 	r = read_mpz(b, ctx->e);
 	if(r < 0) return r;
@@ -463,21 +477,24 @@ abort:
 
 int trsa_encrypt_generate(trsa_ctx ctx,
 		uint8_t *session_key, size_t session_key_length,
-		uint8_t *encrypted_session_key, size_t *encrypted_session_key_length) { return -1; }
+		uint8_t **encrypted_session_key, size_t *encrypted_session_key_length) {
+
+	return -1;
+}
 
 int trsa_decrypt_prepare(trsa_ctx ctx,
 		const uint8_t *encrypted_session_key, size_t encrypted_session_key_length,
-		uint8_t *challenge, size_t *challenge_length) { return -1; }
+		uint8_t **challenge, size_t *challenge_length) { return -1; }
 
 int trsa_decrypt_partial(trsa_ctx ctx,
 		const uint8_t *challenge, size_t challenge_length,
-		uint8_t *response, size_t *response_length) { return -1; }
+		uint8_t **response, size_t *response_length) { return -1; }
 
 int trsa_decrypt_contribute(trsa_ctx ctx,
 		const uint8_t *response, size_t response_length) { return -1; }
 
 int trsa_decrypt_finish(trsa_ctx ctx,
-		uint8_t *session_key, size_t *session_key_length) { return -1; }
+		uint8_t **session_key, size_t *session_key_length) { return -1; }
 
 int trsa_pubkey_get(trsa_ctx ctx, uint8_t **data, size_t *data_length) {
 	if(!ctx || !data || !data_length) {
@@ -537,5 +554,135 @@ int trsa_pubkey_set(trsa_ctx ctx, const uint8_t *data, size_t data_length) {
 abort:
 	buffer_free(buffer);
 
+	return retval;
+}
+
+
+int trsa_op_pub(trsa_ctx ctx, mpz_t in, mpz_t out)
+{
+	if(!ctx) {
+		return -1;
+	}
+
+	mpz_powm_sec(out, in, ctx->e, ctx->n);
+
+	return 0;
+}
+
+int trsa_op_partial(trsa_ctx ctx, mpz_t in, mpz_t out)
+{
+	mpz_t exponent;
+	mpz_init(exponent);
+	int retval = -1;
+
+	// exponent = (2 delta)
+	mpz_fac_ui(exponent, ctx->l);
+	mpz_mul_ui(exponent, exponent, 2);
+
+	mpz_powm_sec(out, in, exponent, ctx->n);
+	mpz_powm_sec(out, out, ctx->my_s, ctx->n);
+
+	retval = 0;
+
+	mpz_clear(exponent);
+	return retval;
+}
+
+int trsa_op_combine_set(trsa_ctx ctx, unsigned int i, mpz_t in)
+{
+	int retval = -1;
+	if(!ctx->x_) {
+		ctx->x_ = calloc(ctx->l, sizeof(*ctx->x_));
+		if(!ctx->x_) {
+			goto abort;
+		}
+	}
+
+	if(i < 1 || i > ctx->l) {
+		goto abort;
+	}
+
+	mpz_set(ctx->x_[i-1], in);
+	retval = 0;
+
+abort:
+	return retval;
+}
+
+static void lambda_S0j(mpz_t out, mpz_t *x_, int l, int j)
+{
+	mpz_fac_ui(out, l);
+	for(int i=1; i<=l; i++) {
+		if(mpz_cmp_ui(x_[i-1], 0) == 0) {
+			continue;
+		}
+		if(i == j) continue;
+		printf("do %i\n", i);
+		mpz_mul_ui(out, out, i);
+	}
+	for(int i=1; i<=l; i++) {
+		if(mpz_cmp_ui(x_[i-1], 0) == 0) {
+			continue;
+		}
+		if(i == j) continue;
+		if(i<j) {
+			mpz_divexact_ui(out, out, j-i);
+			mpz_neg(out, out);
+		} else {
+			mpz_divexact_ui(out, out, i-j);
+		}
+	}
+	printf("lambda(%i): ", j); mpz_out_str(stdout, 10, out); printf("\n");
+}
+
+int trsa_op_combine_do(trsa_ctx ctx, mpz_t in, mpz_t out)
+{
+	int retval = -1;
+	mpz_t a, b, w, tmp;
+	mpz_inits(a, b, w, tmp, NULL);
+
+	mpz_set_ui(w, 1);
+
+	for(int j=1; j<=ctx->l; j++) {
+		if(mpz_cmp_ui(ctx->x_[j-1], 0) == 0) {
+			continue;
+		}
+
+		lambda_S0j(tmp, ctx->x_, ctx->l, j);
+		mpz_mul_ui(tmp, tmp, 2);
+
+		// TODO Insecure?
+		mpz_powm(tmp, ctx->x_[j-1], tmp, ctx->n);
+		mpz_mul(w, w, tmp);
+		mpz_mod(w, w, ctx->n);
+	}
+
+	mpz_fac_ui(tmp, ctx->l);
+	mpz_pow_ui(tmp, tmp, 2);
+	mpz_mul_ui(tmp, tmp, 4);
+
+	// TODO Insecure?
+	mpz_gcdext(tmp, a, b, tmp, ctx->e);
+	if(mpz_cmp_ui(tmp, 1) != 0) {
+		goto abort;
+	}
+
+	// TODO Insecure?
+	mpz_powm(out, w, a, ctx->n);
+	mpz_powm(tmp, in, b, ctx->n);
+	mpz_mul(out, out, tmp);
+	mpz_mod(out, out, ctx->n);
+
+	// FIXME Debugging start
+	printf("a: "); mpz_out_str(stdout, 10, a); printf("\n");
+	printf("b: "); mpz_out_str(stdout, 10, b); printf("\n");
+	printf("w: "); mpz_out_str(stdout, 10, w); printf("\n");
+	printf("out: "); mpz_out_str(stdout, 10, out); printf("\n");
+	// FIXME Debugging end
+
+	retval = 0;
+
+abort:
+	mpz_clears(a, b, w, tmp, NULL);
 	return retval;
 }
