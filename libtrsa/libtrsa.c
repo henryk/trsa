@@ -4,6 +4,8 @@
 
 #include <gmp.h>
 
+#include <openssl/evp.h>
+
 #include "buffer.h"
 #include "libtrsa.h"
 
@@ -11,9 +13,14 @@
 #define DEFAULT_PUBLIC_EXPONENT 3
 #define SECONDARY_SECURITY_PARAMETER 3 /* FIXME Increase to 128 */
 
+#define PBKDF2_ITERATIONS 1000
+#define PBKDF2_DIGEST EVP_sha512()
+#define MAXIMUM_SESSION_KEY_LENGTH 60000
+
 #define MAGIC_SIZE 8
 #define MAGIC_SHARE   "TRSAs\r\n\x00"
 #define MAGIC_PUBKEY  "TRSAp\r\n\x00"
+#define MAGIC_KEMKEY  "TRSAk\r\n\x00"
 
 struct trsa_context {
 	mpz_t p, q, n, e, d;
@@ -114,7 +121,7 @@ int trsa_key_generate(trsa_ctx ctx, unsigned int numbits, unsigned int t, unsign
 	ctx->s = NULL;
 	// FIXME: Guard against memory leak in case of repeated calls
 
-	gmp_randinit_default(rnd);
+	gmp_randinit_default(rnd); // FIXME: Randomness
 	mpz_inits(phi_n, pminus, qminus, delta, c_max, tmp, tmp2, NULL);
 
 	mpz_urandomb(ctx->p, rnd, plength);
@@ -479,7 +486,65 @@ int trsa_encrypt_generate(trsa_ctx ctx,
 		uint8_t *session_key, size_t session_key_length,
 		uint8_t **encrypted_session_key, size_t *encrypted_session_key_length) {
 
-	return -1;
+	int retval = -1;
+	mpz_t x, y;
+	buffer_t x_buffer = NULL, buffer = NULL;
+	gmp_randstate_t rnd;
+
+	mpz_inits(x, y, NULL);
+	gmp_randinit_default(rnd);
+
+	x_buffer = buffer_alloc(estimate_size_public(ctx));
+	buffer = buffer_alloc(MAGIC_SIZE + estimate_size_public(ctx) + estimate_size_mpz(ctx->n));
+
+	if(!x_buffer || !buffer) {
+		goto abort;
+	}
+
+	if(session_key_length > MAXIMUM_SESSION_KEY_LENGTH) {
+		// The OpenSSL API uses int as a length type, ward against overflows
+		goto abort;
+	}
+
+	// 1. Generate random x, dump into x_buffer  FIXME: randomness
+	mpz_urandomm(x, rnd, ctx->n);
+	int r = dump_mpz(x_buffer, x);
+	ABORT_IF_ERROR(r);
+
+	// 2. Dump magic, pubkey into buffer
+	r = dump_magic(buffer, MAGIC_KEMKEY);
+	ABORT_IF_ERROR(r);
+
+	r = dump_public(buffer, ctx);
+	ABORT_IF_ERROR(r);
+
+	// 3. Encrypt (public operation) x to yield y
+	r = trsa_op_pub(ctx, x, y);
+	ABORT_IF_ERROR(r);
+
+	// 4. use buffer as salt and x_buffer as input to KDF, generate session_key output
+	r = PKCS5_PBKDF2_HMAC((char*)(x_buffer->d), x_buffer->p,
+			buffer->d, buffer->p,
+			PBKDF2_ITERATIONS, PBKDF2_DIGEST,
+			session_key_length, session_key);
+	if(!r) {
+		goto abort;
+	}
+
+	// 5. Append y to buffer (is now magic || pubkey || y) and output encrypted_session_key
+	r = dump_mpz(buffer, y);
+	ABORT_IF_ERROR(r);
+
+	buffer_give_up(&buffer, encrypted_session_key, encrypted_session_key_length);
+	retval = 0;
+
+abort:
+	mpz_clears(x, y, NULL);
+	buffer_free(x_buffer);
+	buffer_free(buffer);
+	gmp_randclear(rnd);
+
+	return retval;
 }
 
 int trsa_decrypt_prepare(trsa_ctx ctx,
@@ -494,7 +559,7 @@ int trsa_decrypt_contribute(trsa_ctx ctx,
 		const uint8_t *response, size_t response_length) { return -1; }
 
 int trsa_decrypt_finish(trsa_ctx ctx,
-		uint8_t **session_key, size_t *session_key_length) { return -1; }
+		uint8_t *session_key, size_t session_key_length) { return -1; }
 
 int trsa_pubkey_get(trsa_ctx ctx, uint8_t **data, size_t *data_length) {
 	if(!ctx || !data || !data_length) {

@@ -30,7 +30,7 @@ extern int trsa_decrypt_contribute(trsa_ctx ctx,
 		const uint8_t *response, size_t response_length);
 
 extern int trsa_decrypt_finish(trsa_ctx ctx,
-		uint8_t **session_key, size_t *session_key_length);
+		uint8_t *session_key, size_t session_key_length);
 
 
 // extern int trsa_key_backup(trsa_ctx ctx ...);
