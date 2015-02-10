@@ -22,7 +22,7 @@
 #include "gmp.h" // FIXME Test code
 
 #define FAIL(x) do { fprintf(stderr, x "\n"); goto abort; } while(0)
-#define NUMBITS 10
+#define NUMBITS 2048
 #define SHARES_TOTAL 5
 #define SHARES_NEEDED 3
 
@@ -89,8 +89,7 @@ int main(void) {
 	uint8_t session_key[20];
 	uint8_t *encrypted_session_key = NULL;
 	size_t encrypted_session_key_length = 0;
-	uint8_t *restored_session_key = NULL;
-	size_t restored_session_key_length = 0;
+	uint8_t restored_session_key[sizeof(session_key)];
 	uint8_t *challenge = NULL;
 	size_t challenge_length = 0;
 
@@ -171,14 +170,10 @@ int main(void) {
 			< 0)
 		FAIL("contribute_partial(...,4) failed");
 
-	if(trsa_decrypt_finish(decryptor, &restored_session_key,
-			&restored_session_key_length) < 0)
+	if(trsa_decrypt_finish(decryptor, restored_session_key, sizeof(restored_session_key)) < 0)
 		FAIL("trsa_decrypt_finish() failed");
 
-	if(sizeof(session_key) != restored_session_key_length)
-		FAIL("Length of restored session key doesn't match");
-	if(memcmp(session_key, restored_session_key, restored_session_key_length)
-			!= 0)
+	if(memcmp(session_key, restored_session_key, sizeof(restored_session_key)) != 0)
 		FAIL("Restored session key doesn't match");
 
 	printf("Success\n");
@@ -190,7 +185,7 @@ int main(void) {
 		ctx_ptr++;
 	}
 	free(encrypted_session_key);
-	free(restored_session_key);
+	free(challenge);
 	mpz_clears(x, x_[0], x_[1], x_[2], y, y_, NULL); // FIXME Test code
 	return retval;
 }

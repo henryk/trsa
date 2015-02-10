@@ -10,8 +10,8 @@
 #include "libtrsa.h"
 
 #define PRIME_GENERATION_RETRIES 100
-#define DEFAULT_PUBLIC_EXPONENT 3
-#define SECONDARY_SECURITY_PARAMETER 3 /* FIXME Increase to 128 */
+#define DEFAULT_PUBLIC_EXPONENT 65537
+#define SECONDARY_SECURITY_PARAMETER 128
 
 #define PBKDF2_ITERATIONS 1000
 #define PBKDF2_DIGEST EVP_sha512()
@@ -24,7 +24,7 @@
 
 struct trsa_context {
 	mpz_t p, q, n, e, d;
-	mpz_t *s, *x_, my_s;
+	mpz_t *s, *x_, my_s,  y_challenge;
 	int t, l, my_i;
 };
 
@@ -35,7 +35,7 @@ trsa_ctx trsa_init ()
 		return NULL;
 	}
 
-	mpz_inits(ctx->p, ctx->q, ctx->n, ctx->e, ctx->d, ctx->my_s, NULL);
+	mpz_inits(ctx->p, ctx->q, ctx->n, ctx->e, ctx->d, ctx->my_s, ctx->y_challenge, NULL);
 
 
 	return ctx;
@@ -120,6 +120,7 @@ int trsa_key_generate(trsa_ctx ctx, unsigned int numbits, unsigned int t, unsign
 	ctx->l = l;
 	ctx->s = NULL;
 	// FIXME: Guard against memory leak in case of repeated calls
+	//   Note: All functions should declare what they need and what they will clobber, then set what they generated
 
 	gmp_randinit_default(rnd); // FIXME: Randomness
 	mpz_inits(phi_n, pminus, qminus, delta, c_max, tmp, tmp2, NULL);
@@ -275,7 +276,7 @@ int trsa_fini(trsa_ctx ctx)
 	}
 
 
-	mpz_clears(ctx->p, ctx->q, ctx->n, ctx->e, ctx->d, ctx->my_s, NULL);
+	mpz_clears(ctx->p, ctx->q, ctx->n, ctx->e, ctx->d, ctx->my_s, ctx->y_challenge, NULL);
 
 	if(ctx->s != NULL) {
 		for(int i=0; i<ctx->l; i++) {
@@ -482,9 +483,50 @@ abort:
 	return retval;
 }
 
+
+/* Common control flow between trsa_encrypt_generate() and trsa_decrypt_finish():
+ * 1. Dump x into x_buffer
+ * 2. Dump magic, pubkey, session_key_length into buffer
+ * 3. use buffer as salt and x_buffer as input to KDF, generate session_key output
+ *
+ * INTERNAL USE: no parameters are checked or freed!
+ */
+static int session_key_common(trsa_ctx ctx,
+		buffer_t buffer, buffer_t x_buffer, mpz_t x,
+		uint8_t *session_key, size_t session_key_length)
+{
+	int r = dump_mpz(x_buffer, x);
+	if(r < 0) return r;
+
+	r = dump_magic(buffer, MAGIC_KEMKEY);
+	if(r < 0) return r;
+
+	r = dump_public(buffer, ctx);
+	if(r < 0) return r;
+
+	if(session_key_length > MAXIMUM_SESSION_KEY_LENGTH) {
+		// The OpenSSL API uses int as a length type, ward against overflows
+		return -1;
+	}
+	r = buffer_put_uint16(buffer, session_key_length);
+	if(r < 0) return r;
+
+	r = PKCS5_PBKDF2_HMAC((char*)(x_buffer->d), x_buffer->p,
+			buffer->d, buffer->p,
+			PBKDF2_ITERATIONS, PBKDF2_DIGEST,
+			session_key_length, session_key);
+	if(!r) return -1;
+
+	return 0;
+}
+
 int trsa_encrypt_generate(trsa_ctx ctx,
 		uint8_t *session_key, size_t session_key_length,
 		uint8_t **encrypted_session_key, size_t *encrypted_session_key_length) {
+
+	if(!ctx || !session_key || !encrypted_session_key || !encrypted_session_key_length) {
+		return -1;
+	}
 
 	int retval = -1;
 	mpz_t x, y;
@@ -495,41 +537,23 @@ int trsa_encrypt_generate(trsa_ctx ctx,
 	gmp_randinit_default(rnd);
 
 	x_buffer = buffer_alloc(estimate_size_public(ctx));
-	buffer = buffer_alloc(MAGIC_SIZE + estimate_size_public(ctx) + estimate_size_mpz(ctx->n));
+	buffer = buffer_alloc(MAGIC_SIZE + estimate_size_public(ctx) + estimate_size_mpz(ctx->n) + 2);
 
 	if(!x_buffer || !buffer) {
 		goto abort;
 	}
 
-	if(session_key_length > MAXIMUM_SESSION_KEY_LENGTH) {
-		// The OpenSSL API uses int as a length type, ward against overflows
-		goto abort;
-	}
-
-	// 1. Generate random x, dump into x_buffer  FIXME: randomness
+	// 1. Generate random x  FIXME: randomness
 	mpz_urandomm(x, rnd, ctx->n);
-	int r = dump_mpz(x_buffer, x);
+
+	// 2. Encrypt (public operation) x to yield y
+	int r = trsa_op_pub(ctx, x, y);
 	ABORT_IF_ERROR(r);
 
-	// 2. Dump magic, pubkey into buffer
-	r = dump_magic(buffer, MAGIC_KEMKEY);
-	ABORT_IF_ERROR(r);
-
-	r = dump_public(buffer, ctx);
-	ABORT_IF_ERROR(r);
-
-	// 3. Encrypt (public operation) x to yield y
-	r = trsa_op_pub(ctx, x, y);
-	ABORT_IF_ERROR(r);
-
+	// 3. Dump magic || pubkey || session_key_length into buffer,  dump x into x_buffer
 	// 4. use buffer as salt and x_buffer as input to KDF, generate session_key output
-	r = PKCS5_PBKDF2_HMAC((char*)(x_buffer->d), x_buffer->p,
-			buffer->d, buffer->p,
-			PBKDF2_ITERATIONS, PBKDF2_DIGEST,
-			session_key_length, session_key);
-	if(!r) {
-		goto abort;
-	}
+	r = session_key_common(ctx, buffer, x_buffer, x, session_key, session_key_length);
+	ABORT_IF_ERROR(r);
 
 	// 5. Append y to buffer (is now magic || pubkey || y) and output encrypted_session_key
 	r = dump_mpz(buffer, y);
@@ -549,17 +573,185 @@ abort:
 
 int trsa_decrypt_prepare(trsa_ctx ctx,
 		const uint8_t *encrypted_session_key, size_t encrypted_session_key_length,
-		uint8_t **challenge, size_t *challenge_length) { return -1; }
+		uint8_t **challenge, size_t *challenge_length) {
+
+	if(!ctx || !encrypted_session_key || !challenge || !challenge_length) {
+		return -1;
+	}
+
+	int retval = -1;
+	mpz_t y;
+	buffer_t buffer = NULL, output = NULL;
+
+	mpz_init(y);
+
+	buffer = buffer_init(encrypted_session_key, encrypted_session_key_length);
+	if(!buffer) {
+		goto abort;
+	}
+
+	// 1. Verify and read encrypted_session_key, yielding pubkey, y and session_key_length
+
+	int r = verify_magic(buffer, MAGIC_KEMKEY);
+	ABORT_IF_ERROR(r);
+
+	r = read_public(buffer, ctx);
+	ABORT_IF_ERROR(r);
+
+	uint16_t tmp;
+	r = buffer_get_uint16(buffer, &tmp);
+	ABORT_IF_ERROR(r);
+
+	r = read_mpz(buffer, y);
+	ABORT_IF_ERROR(r);
+
+	// 2. FIXME apply masking
+
+	// 3. Record parameters in context
+
+	mpz_set(ctx->y_challenge, y);
+
+	// 4. Generate and output challenge   FIXME ASCII clear format
+	output = buffer_alloc(estimate_size_mpz(ctx->n));
+
+	r = dump_mpz(output, ctx->y_challenge);
+	ABORT_IF_ERROR(r);
+
+	buffer_give_up(&output, challenge, challenge_length);
+	retval = 0;
+
+
+abort:
+	mpz_clear(y);
+	buffer_free(buffer);
+	buffer_free(output);
+
+	return retval;
+}
 
 int trsa_decrypt_partial(trsa_ctx ctx,
 		const uint8_t *challenge, size_t challenge_length,
-		uint8_t **response, size_t *response_length) { return -1; }
+		uint8_t **response, size_t *response_length) {
+
+	if(!ctx || !challenge || !response || !response_length) {
+		return -1;
+	}
+
+	int retval = -1;
+	mpz_t y_challenge, x_partial;
+	buffer_t in = NULL, out = NULL;
+
+	mpz_inits(y_challenge, x_partial, NULL);
+	in = buffer_init(challenge, challenge_length);
+	if(!in) {
+		goto abort;
+	}
+
+	// 1. Read challenge   FIXME ASCII clear format
+	int r = read_mpz(in, y_challenge);
+	ABORT_IF_ERROR(r);
+
+	// 2. Perform partial computation
+	r = trsa_op_partial(ctx, y_challenge, x_partial);
+	ABORT_IF_ERROR(r);
+
+	// 3. Output response  i || x_partial  FIXME ASCII clear format
+	out = buffer_alloc(2 + estimate_size_mpz(x_partial));
+	if(!out) {
+		goto abort;
+	}
+
+	r = buffer_put_uint16(out, ctx->my_i);  // FIXME verify range of i
+	ABORT_IF_ERROR(r);
+
+	r = dump_mpz(out, x_partial);
+	ABORT_IF_ERROR(r);
+
+	buffer_give_up(&out, response, response_length);
+	retval = 0;
+
+abort:
+	mpz_clears(y_challenge, x_partial, NULL);
+	buffer_free(in);
+	buffer_free(out);
+	return retval;
+}
 
 int trsa_decrypt_contribute(trsa_ctx ctx,
-		const uint8_t *response, size_t response_length) { return -1; }
+		const uint8_t *response, size_t response_length) {
+
+	if(!ctx || !response) {
+		return -1;
+	}
+
+	int retval = -1;
+	uint16_t i;
+	mpz_t x_partial;
+	buffer_t buffer = NULL;
+
+	mpz_init(x_partial);
+	buffer = buffer_init(response, response_length);
+	if(!buffer) {
+		goto abort;
+	}
+
+	// 1. Read response i || x_partial   FIXME ASCII clear format
+	int r = buffer_get_uint16(buffer, &i);
+	ABORT_IF_ERROR(r);
+
+	r = read_mpz(buffer, x_partial);
+	ABORT_IF_ERROR(r);
+
+	// 2. Set in context
+	r = trsa_op_combine_set(ctx, i, x_partial);
+	ABORT_IF_ERROR(r);
+
+	retval = 0;
+
+abort:
+	mpz_clear(x_partial);
+	buffer_free(buffer);
+	return retval;
+}
 
 int trsa_decrypt_finish(trsa_ctx ctx,
-		uint8_t *session_key, size_t session_key_length) { return -1; }
+		uint8_t *session_key, size_t session_key_length) {
+
+	if(!ctx || !session_key) {
+		return -1;
+	}
+
+	int retval = -1;
+	mpz_t x;
+	buffer_t x_buffer = NULL, buffer = NULL;
+
+	mpz_init(x);
+
+	x_buffer = buffer_alloc(estimate_size_public(ctx));
+	buffer = buffer_alloc(MAGIC_SIZE + estimate_size_public(ctx));
+	if(!x_buffer || !buffer) {
+		goto abort;
+	}
+
+	// 1. Execute combine operation, yielding x,  dump x into x_buffer
+	int r = trsa_op_combine_do(ctx, ctx->y_challenge, x);
+	ABORT_IF_ERROR(r);
+
+	// 2. FIXME remove masking
+
+	// 3. dump magic || pubkey || session_key_length into buffer,  x into x_buffer
+	// 4. use buffer as salt and x_buffer as input to KDF, generate session_key output
+	r = session_key_common(ctx, buffer, x_buffer, x, session_key, session_key_length);
+	ABORT_IF_ERROR(r);
+
+	retval = 0;
+
+abort:
+	mpz_clear(x);
+	buffer_free(x_buffer);
+	buffer_free(buffer);
+	return retval;
+}
 
 int trsa_pubkey_get(trsa_ctx ctx, uint8_t **data, size_t *data_length) {
 	if(!ctx || !data || !data_length) {
