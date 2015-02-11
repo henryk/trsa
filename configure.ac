@@ -38,7 +38,7 @@ AC_ARG_WITH(
 
 AC_CHECK_LIB([crypto],[PKCS5_PBKDF2_HMAC], [], [AC_MSG_ERROR([OpenSSL libraries required])])
 
-AC_CHECK_HEADERS([openssl/evp.h],[],[AC_MSG_ERROR([OpenSSL headers required])])
+AC_CHECK_HEADERS([openssl/evp.h openssl/rand.h],[],[AC_MSG_ERROR([OpenSSL headers required])])
 
 
 AC_CONFIG_FILES(Makefile

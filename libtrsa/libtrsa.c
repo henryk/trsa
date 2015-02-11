@@ -5,6 +5,7 @@
 #include <gmp.h>
 
 #include <openssl/evp.h>
+#include <openssl/rand.h>
 
 #include "buffer.h"
 #include "libtrsa.h"
@@ -102,6 +103,98 @@ static void evaluate_poly(mpz_t rop, mpz_t *c, unsigned int order, unsigned long
 	mpz_clear(tmp);
 }
 
+/*
+ * Generate b random bits and put them into out
+ */
+static int random_bits(mpz_t out, size_t b)
+{
+	// FIXME Improve by retrieving more than one byte at a time
+	uint8_t buffer;
+	mpz_set_ui(out, 0);
+
+	while(b > 8) {
+		if(RAND_bytes(&buffer, sizeof(buffer)) != 1) {
+			return -1;
+		}
+		mpz_mul_2exp(out, out, 8);
+		mpz_add_ui(out, out, buffer);
+
+		b -= 8;
+	}
+
+	if(b > 0) {
+		if(RAND_bytes(&buffer, sizeof(buffer)) != 1) {
+			return -1;
+		}
+		mpz_mul_2exp(out, out, b);
+
+		buffer >>= (8-b);
+
+		mpz_add_ui(out, out, buffer);
+
+		b -= b;
+	}
+
+	buffer = 0;
+
+	return 0;
+}
+
+/*
+ * Put random x with 0 <= x < m into out
+ * Based on http://crypto.stackexchange.com/a/7998/2723
+ */
+static int random_number(mpz_t out, mpz_t m)
+{
+	int retval = -1;
+	mpz_t t;
+
+	/* this is the minimum value for u, it may be bigger.
+	 * bigger u consumes slightly more entropy but reduces the
+	 * average loop count below
+	 */
+	size_t u = mpz_sizeinbase(m, 2);
+
+	/* round up u to a multiple of 8, since random_bits()
+	 * internally operates on bytes anyway
+	 */
+	if(u%8 != 0) {
+		u += 8 - (u%8);
+	}
+
+	mpz_init_set_ui(t, 1);
+	mpz_mul_2exp(t, t, u);
+
+	mpz_fdiv_q(t, t, m);
+	mpz_mul(t, t, m);
+
+	// FIXME Debugging start
+	printf("m: "); mpz_out_str(stdout, 10, m); printf("\n");
+	printf("u: %zi\n", u);
+	printf("t: "); mpz_out_str(stdout, 10, t); printf("\n");
+	// FIXME Debugging end
+
+	do {
+		if(random_bits(out, u) < 0) {
+			goto abort;
+		}
+		// FIXME Debugging start
+		printf("x: "); mpz_out_str(stdout, 10, out); printf("\n");
+		// FIXME Debugging end
+	} while(mpz_cmp(out, t) >= 0);
+
+	mpz_mod(out, out, m);
+	retval = 0;
+
+	// FIXME Debugging start
+	printf("r: "); mpz_out_str(stdout, 10, out); printf("\n");
+	// FIXME Debugging end
+
+abort:
+	mpz_clear(t);
+	return retval;
+}
+
 int trsa_key_generate(trsa_ctx ctx, unsigned int numbits, unsigned int t, unsigned int l)
 {
 	if(!ctx) {
@@ -112,7 +205,6 @@ int trsa_key_generate(trsa_ctx ctx, unsigned int numbits, unsigned int t, unsign
 
 	int qlength = numbits/2;
 	int plength = numbits - qlength;
-	gmp_randstate_t rnd;
 	mpz_t phi_n, pminus, qminus, delta, c_max, tmp, tmp2;
 	mpz_t *c = NULL;
 
@@ -122,11 +214,15 @@ int trsa_key_generate(trsa_ctx ctx, unsigned int numbits, unsigned int t, unsign
 	// FIXME: Guard against memory leak in case of repeated calls
 	//   Note: All functions should declare what they need and what they will clobber, then set what they generated
 
-	gmp_randinit_default(rnd); // FIXME: Randomness
 	mpz_inits(phi_n, pminus, qminus, delta, c_max, tmp, tmp2, NULL);
 
-	mpz_urandomb(ctx->p, rnd, plength);
-	mpz_urandomb(ctx->q, rnd, qlength);
+	if(random_bits(ctx->p, plength) < 0) {
+		goto abort;
+	}
+
+	if(random_bits(ctx->q, qlength) < 0) {
+		goto abort;
+	}
 
 	mpz_setbit(ctx->p, 0);
 	mpz_setbit(ctx->p, plength-1);
@@ -213,7 +309,9 @@ int trsa_key_generate(trsa_ctx ctx, unsigned int numbits, unsigned int t, unsign
 
 	mpz_set(c[0], ctx->d);
 	for(int i=1; i<=t; i++) {
-		mpz_urandomm(c[i], rnd, c_max);
+		if(random_number(c[i], c_max) < 0) {
+			goto abort;
+		}
 	}
 
 	ctx->s = calloc(l, sizeof(*ctx->s));
@@ -249,7 +347,6 @@ int trsa_key_generate(trsa_ctx ctx, unsigned int numbits, unsigned int t, unsign
 	retval = 0;
 
 abort:
-	gmp_randclear(rnd);
 	mpz_clears(phi_n, pminus, qminus, delta, c_max, tmp, tmp2, NULL);
 	if(c != NULL) {
 		for(int i=0; i<=t; i++) {
@@ -531,10 +628,8 @@ int trsa_encrypt_generate(trsa_ctx ctx,
 	int retval = -1;
 	mpz_t x, y;
 	buffer_t x_buffer = NULL, buffer = NULL;
-	gmp_randstate_t rnd;
 
 	mpz_inits(x, y, NULL);
-	gmp_randinit_default(rnd);
 
 	x_buffer = buffer_alloc(estimate_size_public(ctx));
 	buffer = buffer_alloc(MAGIC_SIZE + estimate_size_public(ctx) + estimate_size_mpz(ctx->n) + 2);
@@ -543,11 +638,12 @@ int trsa_encrypt_generate(trsa_ctx ctx,
 		goto abort;
 	}
 
-	// 1. Generate random x  FIXME: randomness
-	mpz_urandomm(x, rnd, ctx->n);
+	// 1. Generate random x
+	int r = random_number(x, ctx->n);
+	ABORT_IF_ERROR(r);
 
 	// 2. Encrypt (public operation) x to yield y
-	int r = trsa_op_pub(ctx, x, y);
+	r = trsa_op_pub(ctx, x, y);
 	ABORT_IF_ERROR(r);
 
 	// 3. Dump magic || pubkey || session_key_length into buffer,  dump x into x_buffer
@@ -566,7 +662,6 @@ abort:
 	mpz_clears(x, y, NULL);
 	buffer_free(x_buffer);
 	buffer_free(buffer);
-	gmp_randclear(rnd);
 
 	return retval;
 }
@@ -822,6 +917,10 @@ int trsa_op_pub(trsa_ctx ctx, mpz_t in, mpz_t out)
 	}
 
 	mpz_powm_sec(out, in, ctx->e, ctx->n);
+	// FIXME Debugging start
+	printf("pub in: "); mpz_out_str(stdout, 10, in); printf("\n");
+	printf("pub out: "); mpz_out_str(stdout, 10, out); printf("\n");
+	// FIXME Debugging end
 
 	return 0;
 }
@@ -909,6 +1008,11 @@ int trsa_op_combine_do(trsa_ctx ctx, mpz_t in, mpz_t out)
 		mpz_mul_ui(tmp, tmp, 2);
 
 		// TODO Insecure?
+		// FIXME Debugging start
+		printf("base: "); mpz_out_str(stdout, 10, ctx->x_[j-1]); printf("\n");
+		printf("exp: "); mpz_out_str(stdout, 10, tmp); printf("\n");
+		printf("mod: "); mpz_out_str(stdout, 10, ctx->n); printf("\n");
+		// FIXME Debugging end
 		mpz_powm(tmp, ctx->x_[j-1], tmp, ctx->n);
 		mpz_mul(w, w, tmp);
 		mpz_mod(w, w, ctx->n);
