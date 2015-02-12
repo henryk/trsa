@@ -28,7 +28,7 @@ struct trsa_context {
 	mpz_t *s, *x_, my_s,  y_challenge;
 	int t, l, my_i;
 
-	uint32_t have_set;
+	uint32_t have;
 	uint32_t state;
 };
 
@@ -36,10 +36,10 @@ struct trsa_context {
 #define CTX_PRIVATE       (1L<<1)
 #define CTX_SHARES        (1L<<2)
 #define CTX_MY_SHARE      (1L<<3)
-#define CTX_PARTIALS      (1L<<4)
-#define CTX_CHALLENGE     (1L<<5)
+#define CTX_CHALLENGE     (1L<<4)   /* Note: Clearing CTX_CHALLENGE also clears CTX_PARTIALS */
+#define CTX_PARTIALS      (1L<<5)
 
-#define CTX_ALL           (CTX_PUBLIC|CTX_PRIVATE|CTX_SHARES|CTX_MY_SHARE|CTX_PARTIALS|CTX_CHALLENGE)
+#define CTX_ALL           (CTX_PUBLIC|CTX_PRIVATE|CTX_SHARES|CTX_MY_SHARE|CTX_CHALLENGE|CTX_PARTIALS)
 
 #define STATE_NONE        (1L<<0)
 #define STATE_DEC_PREP    (1L<<1)
@@ -54,7 +54,7 @@ struct trsa_context {
 
 #define START(...)  METHOD_START(ctx, __VA_ARGS__); int retval = -1
 #define FINISH(...) return METHOD_FINISH(ctx, retval, __VA_ARGS__)
-#define ABORT_IF_ERROR(r) do { if(r<0){retval=r; goto abort;} } while(0)
+#define ABORT_IF_ERROR( exp ) do { int r = (exp); if(r<0){retval=r; goto abort;} } while(0)
 
 struct ctx_require_arguments {
 	uint32_t need, clear;
@@ -64,6 +64,7 @@ struct ctx_require_arguments {
 struct ctx_provide_arguments {
 	uint32_t provide;
 	uint32_t state, state_good, state_error;
+	uint32_t clear;
 };
 
 static int ctx_require(trsa_ctx ctx, struct ctx_require_arguments args);
@@ -579,7 +580,7 @@ abort:
 }
 
 int trsa_share_set(trsa_ctx ctx, const uint8_t *data, size_t data_length) {
-	START(.clear = CTX_PUBLIC | CTX_MY_SHARE);
+	START(.clear = CTX_ALL | CTX_MY_SHARE);
 
 	if(!data || !data_length) {
 		return -1;
@@ -705,7 +706,7 @@ int trsa_decrypt_prepare(trsa_ctx ctx,
 		const uint8_t *encrypted_session_key, size_t encrypted_session_key_length,
 		uint8_t **challenge, size_t *challenge_length) {
 
-	START(.clear = CTX_PUBLIC | CTX_PARTIALS | CTX_CHALLENGE);
+	START(.clear = CTX_ALL | CTX_CHALLENGE);
 
 	if(!encrypted_session_key || !challenge || !challenge_length) {
 		return -1;
@@ -757,7 +758,7 @@ abort:
 	buffer_free(buffer);
 	buffer_free(output);
 
-	FINISH(CTX_PUBLIC | CTX_CHALLENGE, .state_good=STATE_DEC_PREP);
+	FINISH(CTX_PUBLIC | CTX_CHALLENGE, .state=STATE_DEC_PREP);
 }
 
 int trsa_decrypt_partial(trsa_ctx ctx,
@@ -887,7 +888,7 @@ abort:
 	buffer_free(x_buffer);
 	buffer_free(buffer);
 
-	FINISH(.state=STATE_NONE);
+	FINISH(.state=STATE_NONE, .clear = CTX_CHALLENGE | CTX_PARTIALS);
 }
 
 int trsa_pubkey_get(trsa_ctx ctx, uint8_t **data, size_t *data_length) {
@@ -1032,7 +1033,7 @@ static void lambda_S0j(mpz_t out, mpz_t *x_, int l, int j)
 
 int trsa_op_combine_do(trsa_ctx ctx, mpz_t in, mpz_t out)
 {
-	START(.need = CTX_PUBLIC);
+	START(.need = CTX_PUBLIC | CTX_PARTIALS);
 
 	mpz_t a, b, w, tmp;
 	mpz_inits(a, b, w, tmp, NULL);
@@ -1086,7 +1087,7 @@ int trsa_op_combine_do(trsa_ctx ctx, mpz_t in, mpz_t out)
 abort:
 	mpz_clears(a, b, w, tmp, NULL);
 
-	FINISH(0);
+	FINISH(0, .clear = CTX_PARTIALS);
 }
 
 
