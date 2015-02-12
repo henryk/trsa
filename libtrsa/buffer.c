@@ -5,10 +5,11 @@
  *      Author: henryk
  */
 
+#include <string.h>
+
+#include <gmp.h>
 
 #include "buffer.h"
-
-#include <string.h>
 
 static int ensure_space(struct buffer *b, size_t length)
 {
@@ -72,6 +73,44 @@ int buffer_put_bytes(buffer_t b, const uint8_t *data, size_t data_length)
 	return 0;
 }
 
+int buffer_put_mpz(buffer_t b, mpz_t data)
+{
+	int retval = -1;
+	size_t d_length = 0;
+	uint8_t *d = mpz_export(NULL, &d_length, 1, 1, 1, 0, data);
+
+	int r = ensure_space(b, 2 + d_length + 1);
+	if(r < 0) {
+		retval = r;
+		goto abort;
+	}
+
+	if(!b->may_modify) {
+		goto abort;
+	}
+
+	if(!data || d_length > 65535) {
+		goto abort;
+	}
+
+	if( buffer_put_uint16(b, d_length) < 0) {
+		goto abort;
+	}
+
+	if( buffer_put_bytes(b, d, d_length) < 0) {
+		goto abort;
+	}
+
+	b->d[b->p++] = (mpz_sgn(data) < 0) ? 1 : 0;
+
+	retval = 0;
+
+abort:
+	free(d);
+	return retval;
+
+}
+
 int buffer_get_uint16(buffer_t b, uint16_t *data)
 {
 	int r = ensure_space(b, 2);
@@ -107,6 +146,32 @@ extern int buffer_get_bytes(buffer_t b, uint8_t const **data, size_t data_length
 	return 0;
 }
 
+int buffer_get_mpz(buffer_t b, mpz_t data)
+{
+	uint16_t d_length = 0;
+	const uint8_t *d = NULL;
+
+	if( buffer_get_uint16(b, &d_length) < 0) {
+		return -1;
+	}
+
+	int r = ensure_space(b, d_length + 1);
+	if(r < 0) {
+		return r;
+	}
+
+	if( buffer_get_bytes(b, &d, d_length) < 0) {
+		return -1;
+	}
+
+	mpz_import(data, d_length, 1, 1, 1, 0, d);
+
+	if( b->d[b->p++] ) {
+		mpz_neg(data, data);
+	}
+
+	return 0;
+}
 
 
 buffer_t buffer_alloc(size_t size_estimate)

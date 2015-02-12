@@ -437,48 +437,6 @@ static size_t estimate_size_mpz(mpz_t op)
 	return 2 + (mpz_sizeinbase (op, 2) + 7) / 8;
 }
 
-static int dump_mpz(buffer_t b, mpz_t op)
-{
-	int retval = -1;
-	size_t data_length = 0;
-	uint8_t *data = mpz_export(NULL, &data_length, 1, 1, 1, 0, op);
-
-	// Note: sign is not stored. Are all values positive?
-
-	ABORT_IF(!data || data_length > 65535);
-
-	ABORT_IF_ERROR( buffer_put_uint16(b, data_length) );
-
-	ABORT_IF_ERROR( buffer_put_bytes(b, data, data_length) );
-
-	retval = 0;
-
-abort:
-	free(data);
-	return retval;
-}
-
-static int read_mpz(buffer_t b, mpz_t rop)
-{
-	int retval = -1;
-	uint16_t data_length = 0;
-	const uint8_t *data = NULL;;
-
-	ABORT_IF_ERROR( buffer_get_uint16(b, &data_length) );
-
-	ABORT_IF_ERROR( buffer_get_bytes(b, &data, data_length) );
-
-	mpz_import(rop, data_length, 1, 1, 1, 0, data);
-
-	// Note: sign is not restored. Are all values positive?
-
-	retval = 0;
-
-abort:
-	return retval;
-}
-
-
 static size_t estimate_size_public(trsa_ctx ctx)
 {
 	return 2 + estimate_size_mpz(ctx->n) + estimate_size_mpz(ctx->e);
@@ -489,9 +447,9 @@ static int dump_public(buffer_t b, trsa_ctx ctx)
 	if(ctx->l > 65535) return -1;
 	int r = buffer_put_uint16(b, ctx->l);
 	if(r < 0) return r;
-	r = dump_mpz(b, ctx->n);
+	r = buffer_put_mpz(b, ctx->n);
 	if(r < 0) return r;
-	r = dump_mpz(b, ctx->e);
+	r = buffer_put_mpz(b, ctx->e);
 	if(r < 0) return r;
 	return 0;
 }
@@ -502,9 +460,9 @@ static int read_public(buffer_t b, trsa_ctx ctx)
 	int r = buffer_get_uint16(b, &tmp);
 	if(r < 0) return r;
 	ctx->l = tmp;
-	r = read_mpz(b, ctx->n);
+	r = buffer_get_mpz(b, ctx->n);
 	if(r < 0) return r;
-	r = read_mpz(b, ctx->e);
+	r = buffer_get_mpz(b, ctx->e);
 	if(r < 0) return r;
 	return 0;
 }
@@ -535,7 +493,7 @@ int trsa_share_get(trsa_ctx ctx, unsigned int i, uint8_t **data, size_t *data_le
 
 	ABORT_IF_ERROR( buffer_put_uint16(buffer, i) );  // FIXME: range of i
 
-	ABORT_IF_ERROR( dump_mpz(buffer, ctx->s[i-1]) );
+	ABORT_IF_ERROR( buffer_put_mpz(buffer, ctx->s[i-1]) );
 
 	buffer_give_up(&buffer, data, data_length);
 	retval = 0;
@@ -566,7 +524,7 @@ int trsa_share_set(trsa_ctx ctx, const uint8_t *data, size_t data_length) {
 	ABORT_IF_ERROR( buffer_get_uint16(buffer, &i) );
 	ctx->my_i = i;
 
-	ABORT_IF_ERROR( read_mpz(buffer, ctx->my_s) );
+	ABORT_IF_ERROR( buffer_get_mpz(buffer, ctx->my_s) );
 
 	retval = 0;
 
@@ -588,7 +546,7 @@ static int session_key_common(trsa_ctx ctx,
 		buffer_t buffer, buffer_t x_buffer, mpz_t x,
 		uint8_t *session_key, size_t session_key_length)
 {
-	int r = dump_mpz(x_buffer, x);
+	int r = buffer_put_mpz(x_buffer, x);
 	if(r < 0) return r;
 
 	r = dump_magic(buffer, MAGIC_KEMKEY);
@@ -644,7 +602,7 @@ int trsa_encrypt_generate(trsa_ctx ctx,
 	ABORT_IF_ERROR( session_key_common(ctx, buffer, x_buffer, x, session_key, session_key_length) );
 
 	// 5. Append y to buffer (is now magic || pubkey || y) and output encrypted_session_key
-	ABORT_IF_ERROR( dump_mpz(buffer, y) );
+	ABORT_IF_ERROR( buffer_put_mpz(buffer, y) );
 
 	buffer_give_up(&buffer, encrypted_session_key, encrypted_session_key_length);
 	retval = 0;
@@ -684,7 +642,7 @@ int trsa_decrypt_prepare(trsa_ctx ctx,
 	uint16_t tmp; /* Session key length read into here and ignored */
 	ABORT_IF_ERROR( buffer_get_uint16(buffer, &tmp) );
 
-	ABORT_IF_ERROR( read_mpz(buffer, y) );
+	ABORT_IF_ERROR( buffer_get_mpz(buffer, y) );
 
 	// 2. FIXME apply masking
 
@@ -696,7 +654,7 @@ int trsa_decrypt_prepare(trsa_ctx ctx,
 	output = buffer_alloc(estimate_size_mpz(ctx->n));
 	ABORT_IF(!output);
 
-	ABORT_IF_ERROR( dump_mpz(output, ctx->y_challenge) );
+	ABORT_IF_ERROR( buffer_put_mpz(output, ctx->y_challenge) );
 
 	buffer_give_up(&output, challenge, challenge_length);
 	retval = 0;
@@ -728,7 +686,7 @@ int trsa_decrypt_partial(trsa_ctx ctx,
 	ABORT_IF(!in);
 
 	// 1. Read challenge   FIXME ASCII clear format
-	ABORT_IF_ERROR( read_mpz(in, y_challenge) );
+	ABORT_IF_ERROR( buffer_get_mpz(in, y_challenge) );
 
 	// 2. Perform partial computation
 	ABORT_IF_ERROR( trsa_op_partial(ctx, y_challenge, x_partial) );
@@ -739,7 +697,7 @@ int trsa_decrypt_partial(trsa_ctx ctx,
 
 	ABORT_IF_ERROR( buffer_put_uint16(out, ctx->my_i) );  // FIXME verify range of i (must be <=65535)
 
-	ABORT_IF_ERROR( dump_mpz(out, x_partial) );
+	ABORT_IF_ERROR( buffer_put_mpz(out, x_partial) );
 
 	buffer_give_up(&out, response, response_length);
 	retval = 0;
@@ -772,7 +730,7 @@ int trsa_decrypt_contribute(trsa_ctx ctx,
 	// 1. Read response i || x_partial   FIXME ASCII clear format
 	ABORT_IF_ERROR( buffer_get_uint16(buffer, &i) );
 
-	ABORT_IF_ERROR( read_mpz(buffer, x_partial) );
+	ABORT_IF_ERROR( buffer_get_mpz(buffer, x_partial) );
 
 	// 2. Set in context
 	ABORT_IF_ERROR( trsa_op_combine_set(ctx, i, x_partial) );
