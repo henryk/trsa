@@ -54,7 +54,9 @@ struct trsa_context {
 
 #define START(...)  METHOD_START(ctx, __VA_ARGS__); int retval = -1
 #define FINISH(...) return METHOD_FINISH(ctx, retval, __VA_ARGS__)
+
 #define ABORT_IF_ERROR( exp ) do { int r = (exp); if(r<0){retval=r; goto abort;} } while(0)
+#define ABORT_IF( exp ) do { if( exp ) { goto abort; } } while(0)
 
 struct ctx_require_arguments {
 	uint32_t need, clear;
@@ -131,9 +133,7 @@ static int accept_prime(mpz_t p, unsigned int t)
 	mpz_t minusonehalf;
 	mpz_init(minusonehalf);
 
-	if(mpz_probab_prime_p(p, 25) == 0) {
-		goto abort;
-	}
+	ABORT_IF( mpz_probab_prime_p(p, 25) == 0);
 
 	mpz_sub_ui(minusonehalf, p, 1);
 	mpz_divexact_ui(minusonehalf, minusonehalf, 2);
@@ -142,9 +142,7 @@ static int accept_prime(mpz_t p, unsigned int t)
 		if(FIRST_PRIMES[i] >= 3*t*t) {
 			break;
 		}
-		if( mpz_fdiv_ui(minusonehalf, FIRST_PRIMES[i]) == 0) {
-			goto abort;
-		}
+		ABORT_IF( mpz_fdiv_ui(minusonehalf, FIRST_PRIMES[i]) == 0);
 	}
 
 	// FIXME: handle primes greater than FIRST_PRIMES[-1]
@@ -244,9 +242,8 @@ static int random_number(mpz_t out, mpz_t m)
 	// FIXME Debugging end
 
 	do {
-		if(random_bits(out, u) < 0) {
-			goto abort;
-		}
+		ABORT_IF( random_bits(out, u) < 0 );
+
 		// FIXME Debugging start
 		printf("x: "); mpz_out_str(stdout, 10, out); printf("\n");
 		// FIXME Debugging end
@@ -279,13 +276,8 @@ int trsa_key_generate(trsa_ctx ctx, unsigned int numbits, unsigned int t, unsign
 
 	mpz_inits(phi_n, pminus, qminus, delta, c_max, tmp, tmp2, NULL);
 
-	if(random_bits(ctx->p, plength) < 0) {
-		goto abort;
-	}
-
-	if(random_bits(ctx->q, qlength) < 0) {
-		goto abort;
-	}
+	ABORT_IF_ERROR( random_bits(ctx->p, plength) );
+	ABORT_IF_ERROR( random_bits(ctx->q, qlength) );
 
 	mpz_setbit(ctx->p, 0);
 	mpz_setbit(ctx->p, plength-1);
@@ -304,9 +296,7 @@ int trsa_key_generate(trsa_ctx ctx, unsigned int numbits, unsigned int t, unsign
 
 	} while(--retries > 0);
 
-	if(retries <= 0) {
-		goto abort;
-	}
+	ABORT_IF(retries <= 0);
 
 	retries = PRIME_GENERATION_RETRIES;
 	do {
@@ -318,9 +308,7 @@ int trsa_key_generate(trsa_ctx ctx, unsigned int numbits, unsigned int t, unsign
 
 	} while(--retries > 0);
 
-	if(retries <= 0) {
-		goto abort;
-	}
+	ABORT_IF(retries <= 0);
 
 	mpz_sub_ui(pminus, ctx->p, 1);
 	mpz_sub_ui(qminus, ctx->q, 1);
@@ -348,9 +336,7 @@ int trsa_key_generate(trsa_ctx ctx, unsigned int numbits, unsigned int t, unsign
 		mpz_nextprime(ctx->e, ctx->e);
 	} while(--retries > 0);
 
-	if(retries <= 0) {
-		goto abort;
-	}
+	ABORT_IF(retries <= 0);
 
 	mpz_invert(ctx->d, ctx->e, phi_n);
 
@@ -361,9 +347,7 @@ int trsa_key_generate(trsa_ctx ctx, unsigned int numbits, unsigned int t, unsign
 
 
 	c = calloc(t+1, sizeof(*c));
-	if(c == NULL) {
-		goto abort;
-	}
+	ABORT_IF(!c);
 
 	mpz_init(c[0]);
 	for(int i=1; i<=t; i++) {
@@ -378,9 +362,7 @@ int trsa_key_generate(trsa_ctx ctx, unsigned int numbits, unsigned int t, unsign
 	}
 
 	ctx->s = calloc(l, sizeof(*ctx->s));
-	if(ctx->s == NULL) {
-		goto abort;
-	}
+	ABORT_IF(!ctx->s);
 
 	for(int i=0; i<l; i++) {
 		mpz_init(ctx->s[i]);
@@ -462,9 +444,7 @@ static int dump_mpz(buffer_t b, mpz_t op)
 
 	// Note: sign is not stored. Are all values positive?
 
-	if(!data || data_length > 65535) {
-		goto abort;
-	}
+	ABORT_IF(!data || data_length > 65535);
 
 	ABORT_IF_ERROR( buffer_put_uint16(b, data_length) );
 
@@ -546,9 +526,7 @@ int trsa_share_get(trsa_ctx ctx, unsigned int i, uint8_t **data, size_t *data_le
 	size_estimate += estimate_size_mpz(ctx->s[i-1]);
 
 	buffer_t buffer = buffer_alloc(size_estimate);
-	if(!buffer) {
-		goto abort;
-	}
+	ABORT_IF(!buffer);
 
 	ABORT_IF_ERROR( dump_magic(buffer, MAGIC_SHARE) );
 
@@ -577,9 +555,7 @@ int trsa_share_set(trsa_ctx ctx, const uint8_t *data, size_t data_length) {
 	// Read in public parameters, followed by private share parameters my_i, ctx->my_s
 
 	buffer_t buffer = buffer_init(data, data_length);
-	if(!buffer) {
-		goto abort;
-	}
+	ABORT_IF(!buffer);
 
 	ABORT_IF_ERROR( verify_magic(buffer, MAGIC_SHARE) );
 
@@ -654,9 +630,7 @@ int trsa_encrypt_generate(trsa_ctx ctx,
 	x_buffer = buffer_alloc(estimate_size_public(ctx));
 	buffer = buffer_alloc(MAGIC_SIZE + estimate_size_public(ctx) + estimate_size_mpz(ctx->n) + 2);
 
-	if(!x_buffer || !buffer) {
-		goto abort;
-	}
+	ABORT_IF(!x_buffer || !buffer);
 
 	// 1. Generate random x
 	ABORT_IF_ERROR( random_number(x, ctx->n) );
@@ -698,9 +672,7 @@ int trsa_decrypt_prepare(trsa_ctx ctx,
 	mpz_init(y);
 
 	buffer = buffer_init(encrypted_session_key, encrypted_session_key_length);
-	if(!buffer) {
-		goto abort;
-	}
+	ABORT_IF(!buffer);
 
 	// 1. Verify and read encrypted_session_key, yielding pubkey, y and session_key_length (ignored)
 
@@ -721,6 +693,7 @@ int trsa_decrypt_prepare(trsa_ctx ctx,
 
 	// 4. Generate and output challenge   FIXME ASCII clear format
 	output = buffer_alloc(estimate_size_mpz(ctx->n));
+	ABORT_IF(!output);
 
 	ABORT_IF_ERROR( dump_mpz(output, ctx->y_challenge) );
 
@@ -751,9 +724,7 @@ int trsa_decrypt_partial(trsa_ctx ctx,
 
 	mpz_inits(y_challenge, x_partial, NULL);
 	in = buffer_init(challenge, challenge_length);
-	if(!in) {
-		goto abort;
-	}
+	ABORT_IF(!in);
 
 	// 1. Read challenge   FIXME ASCII clear format
 	ABORT_IF_ERROR( read_mpz(in, y_challenge) );
@@ -763,9 +734,7 @@ int trsa_decrypt_partial(trsa_ctx ctx,
 
 	// 3. Output response  i || x_partial  FIXME ASCII clear format
 	out = buffer_alloc(2 + estimate_size_mpz(x_partial));
-	if(!out) {
-		goto abort;
-	}
+	ABORT_IF(!out);
 
 	ABORT_IF_ERROR( buffer_put_uint16(out, ctx->my_i) );  // FIXME verify range of i (must be <=65535)
 
@@ -797,9 +766,7 @@ int trsa_decrypt_contribute(trsa_ctx ctx,
 
 	mpz_init(x_partial);
 	buffer = buffer_init(response, response_length);
-	if(!buffer) {
-		goto abort;
-	}
+	ABORT_IF(!buffer);
 
 	// 1. Read response i || x_partial   FIXME ASCII clear format
 	ABORT_IF_ERROR( buffer_get_uint16(buffer, &i) );
@@ -834,9 +801,7 @@ int trsa_decrypt_finish(trsa_ctx ctx,
 
 	x_buffer = buffer_alloc(estimate_size_public(ctx));
 	buffer = buffer_alloc(MAGIC_SIZE + estimate_size_public(ctx));
-	if(!x_buffer || !buffer) {
-		goto abort;
-	}
+	ABORT_IF(!x_buffer || !buffer);
 
 	// 1. Execute combine operation, yielding x,  dump x into x_buffer
 	ABORT_IF_ERROR( trsa_op_combine_do(ctx, ctx->y_challenge, x) );
@@ -869,9 +834,7 @@ int trsa_pubkey_get(trsa_ctx ctx, uint8_t **data, size_t *data_length) {
 	size_estimate += estimate_size_public(ctx);
 
 	buffer_t buffer = buffer_alloc(size_estimate);
-	if(!buffer) {
-		goto abort;
-	}
+	ABORT_IF(!buffer);
 
 	ABORT_IF_ERROR( dump_magic(buffer, MAGIC_PUBKEY) );
 
@@ -896,9 +859,7 @@ int trsa_pubkey_set(trsa_ctx ctx, const uint8_t *data, size_t data_length) {
 	// Read in public parameters
 
 	buffer_t buffer = buffer_init(data, data_length);
-	if(!buffer) {
-		goto abort;
-	}
+	ABORT_IF(!buffer);
 
 	ABORT_IF_ERROR( verify_magic(buffer, MAGIC_PUBKEY) );
 
@@ -951,14 +912,10 @@ int trsa_op_combine_set(trsa_ctx ctx, unsigned int i, mpz_t in)
 
 	if(!ctx->x_) {
 		ctx->x_ = calloc(ctx->l, sizeof(*ctx->x_));
-		if(!ctx->x_) {
-			goto abort;
-		}
+		ABORT_IF(!ctx->x_);
 	}
 
-	if(i < 1 || i > ctx->l) {
-		goto abort;
-	}
+	ABORT_IF(i < 1 || i > ctx->l);
 
 	mpz_set(ctx->x_[i-1], in);
 	retval = 0;
@@ -1027,9 +984,7 @@ int trsa_op_combine_do(trsa_ctx ctx, mpz_t in, mpz_t out)
 
 	// TODO Insecure?
 	mpz_gcdext(tmp, a, b, tmp, ctx->e);
-	if(mpz_cmp_ui(tmp, 1) != 0) {
-		goto abort;
-	}
+	ABORT_IF(mpz_cmp_ui(tmp, 1) != 0);
 
 	// TODO Insecure?
 	mpz_powm(out, w, a, ctx->n);
