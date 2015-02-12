@@ -462,15 +462,13 @@ static int dump_mpz(buffer_t b, mpz_t op)
 
 	// Note: sign is not stored. Are all values positive?
 
-	if(data_length > 65535) {
+	if(!data || data_length > 65535) {
 		goto abort;
 	}
 
-	int r = buffer_put_uint16(b, data_length);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( buffer_put_uint16(b, data_length) );
 
-	r = buffer_put_bytes(b, data, data_length);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( buffer_put_bytes(b, data, data_length) );
 
 	retval = 0;
 
@@ -485,11 +483,9 @@ static int read_mpz(buffer_t b, mpz_t rop)
 	uint16_t data_length = 0;
 	const uint8_t *data = NULL;;
 
-	int r = buffer_get_uint16(b, &data_length);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( buffer_get_uint16(b, &data_length) );
 
-	r = buffer_get_bytes(b, &data, data_length);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( buffer_get_bytes(b, &data, data_length) );
 
 	mpz_import(rop, data_length, 1, 1, 1, 0, data);
 
@@ -539,10 +535,6 @@ int trsa_share_get(trsa_ctx ctx, unsigned int i, uint8_t **data, size_t *data_le
 		return -1;
 	}
 
-	if(*data || *data_length) {
-		return -1; // Not implemented yet
-	}
-
 	// FIXME: Allow to iterate by using i=0
 	if(i < 1 || i > ctx->l) {
 		return -1;
@@ -558,17 +550,13 @@ int trsa_share_get(trsa_ctx ctx, unsigned int i, uint8_t **data, size_t *data_le
 		goto abort;
 	}
 
-	int r = dump_magic(buffer, MAGIC_SHARE);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( dump_magic(buffer, MAGIC_SHARE) );
 
-	r = dump_public(buffer, ctx);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( dump_public(buffer, ctx) );
 
-	r = buffer_put_uint16(buffer, i);  // FIXME: range of i
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( buffer_put_uint16(buffer, i) );  // FIXME: range of i
 
-	r = dump_mpz(buffer, ctx->s[i-1]);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( dump_mpz(buffer, ctx->s[i-1]) );
 
 	buffer_give_up(&buffer, data, data_length);
 	retval = 0;
@@ -593,19 +581,15 @@ int trsa_share_set(trsa_ctx ctx, const uint8_t *data, size_t data_length) {
 		goto abort;
 	}
 
-	int r = verify_magic(buffer, MAGIC_SHARE);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( verify_magic(buffer, MAGIC_SHARE) );
 
-	r = read_public(buffer, ctx);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( read_public(buffer, ctx) );
 
 	uint16_t i;
-	r = buffer_get_uint16(buffer, &i);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( buffer_get_uint16(buffer, &i) );
 	ctx->my_i = i;
 
-	r = read_mpz(buffer, ctx->my_s);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( read_mpz(buffer, ctx->my_s) );
 
 	retval = 0;
 
@@ -675,21 +659,17 @@ int trsa_encrypt_generate(trsa_ctx ctx,
 	}
 
 	// 1. Generate random x
-	int r = random_number(x, ctx->n);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( random_number(x, ctx->n) );
 
 	// 2. Encrypt (public operation) x to yield y
-	r = trsa_op_pub(ctx, x, y);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( trsa_op_pub(ctx, x, y) );
 
 	// 3. Dump magic || pubkey || session_key_length into buffer,  dump x into x_buffer
 	// 4. use buffer as salt and x_buffer as input to KDF, generate session_key output
-	r = session_key_common(ctx, buffer, x_buffer, x, session_key, session_key_length);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( session_key_common(ctx, buffer, x_buffer, x, session_key, session_key_length) );
 
 	// 5. Append y to buffer (is now magic || pubkey || y) and output encrypted_session_key
-	r = dump_mpz(buffer, y);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( dump_mpz(buffer, y) );
 
 	buffer_give_up(&buffer, encrypted_session_key, encrypted_session_key_length);
 	retval = 0;
@@ -722,20 +702,16 @@ int trsa_decrypt_prepare(trsa_ctx ctx,
 		goto abort;
 	}
 
-	// 1. Verify and read encrypted_session_key, yielding pubkey, y and session_key_length
+	// 1. Verify and read encrypted_session_key, yielding pubkey, y and session_key_length (ignored)
 
-	int r = verify_magic(buffer, MAGIC_KEMKEY);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( verify_magic(buffer, MAGIC_KEMKEY) );
 
-	r = read_public(buffer, ctx);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( read_public(buffer, ctx) );
 
-	uint16_t tmp;
-	r = buffer_get_uint16(buffer, &tmp);
-	ABORT_IF_ERROR(r);
+	uint16_t tmp; /* Session key length read into here and ignored */
+	ABORT_IF_ERROR( buffer_get_uint16(buffer, &tmp) );
 
-	r = read_mpz(buffer, y);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( read_mpz(buffer, y) );
 
 	// 2. FIXME apply masking
 
@@ -746,8 +722,7 @@ int trsa_decrypt_prepare(trsa_ctx ctx,
 	// 4. Generate and output challenge   FIXME ASCII clear format
 	output = buffer_alloc(estimate_size_mpz(ctx->n));
 
-	r = dump_mpz(output, ctx->y_challenge);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( dump_mpz(output, ctx->y_challenge) );
 
 	buffer_give_up(&output, challenge, challenge_length);
 	retval = 0;
@@ -781,12 +756,10 @@ int trsa_decrypt_partial(trsa_ctx ctx,
 	}
 
 	// 1. Read challenge   FIXME ASCII clear format
-	int r = read_mpz(in, y_challenge);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( read_mpz(in, y_challenge) );
 
 	// 2. Perform partial computation
-	r = trsa_op_partial(ctx, y_challenge, x_partial);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( trsa_op_partial(ctx, y_challenge, x_partial) );
 
 	// 3. Output response  i || x_partial  FIXME ASCII clear format
 	out = buffer_alloc(2 + estimate_size_mpz(x_partial));
@@ -794,11 +767,9 @@ int trsa_decrypt_partial(trsa_ctx ctx,
 		goto abort;
 	}
 
-	r = buffer_put_uint16(out, ctx->my_i);  // FIXME verify range of i
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( buffer_put_uint16(out, ctx->my_i) );  // FIXME verify range of i (must be <=65535)
 
-	r = dump_mpz(out, x_partial);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( dump_mpz(out, x_partial) );
 
 	buffer_give_up(&out, response, response_length);
 	retval = 0;
@@ -831,15 +802,12 @@ int trsa_decrypt_contribute(trsa_ctx ctx,
 	}
 
 	// 1. Read response i || x_partial   FIXME ASCII clear format
-	int r = buffer_get_uint16(buffer, &i);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( buffer_get_uint16(buffer, &i) );
 
-	r = read_mpz(buffer, x_partial);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( read_mpz(buffer, x_partial) );
 
 	// 2. Set in context
-	r = trsa_op_combine_set(ctx, i, x_partial);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( trsa_op_combine_set(ctx, i, x_partial) );
 
 	retval = 0;
 
@@ -871,15 +839,13 @@ int trsa_decrypt_finish(trsa_ctx ctx,
 	}
 
 	// 1. Execute combine operation, yielding x,  dump x into x_buffer
-	int r = trsa_op_combine_do(ctx, ctx->y_challenge, x);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( trsa_op_combine_do(ctx, ctx->y_challenge, x) );
 
 	// 2. FIXME remove masking
 
 	// 3. dump magic || pubkey || session_key_length into buffer,  x into x_buffer
 	// 4. use buffer as salt and x_buffer as input to KDF, generate session_key output
-	r = session_key_common(ctx, buffer, x_buffer, x, session_key, session_key_length);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( session_key_common(ctx, buffer, x_buffer, x, session_key, session_key_length) );
 
 	retval = 0;
 
@@ -907,11 +873,9 @@ int trsa_pubkey_get(trsa_ctx ctx, uint8_t **data, size_t *data_length) {
 		goto abort;
 	}
 
-	int r = dump_magic(buffer, MAGIC_PUBKEY);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( dump_magic(buffer, MAGIC_PUBKEY) );
 
-	r = dump_public(buffer, ctx);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( dump_public(buffer, ctx) );
 
 	buffer_give_up(&buffer, data, data_length);
 	retval = 0;
@@ -936,11 +900,9 @@ int trsa_pubkey_set(trsa_ctx ctx, const uint8_t *data, size_t data_length) {
 		goto abort;
 	}
 
-	int r = verify_magic(buffer, MAGIC_PUBKEY);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( verify_magic(buffer, MAGIC_PUBKEY) );
 
-	r = read_public(buffer, ctx);
-	ABORT_IF_ERROR(r);
+	ABORT_IF_ERROR( read_public(buffer, ctx) );
 
 	retval = 0;
 
