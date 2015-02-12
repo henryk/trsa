@@ -1,6 +1,8 @@
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h> // FIXME Debugging
+#ifdef DEBUG_PRINTF
+#include <stdio.h>
+#endif /* DEBUG_PRINTF */
 
 #include <gmp.h>
 
@@ -235,26 +237,25 @@ static int random_number(mpz_t out, mpz_t m)
 	mpz_fdiv_q(t, t, m);
 	mpz_mul(t, t, m);
 
-	// FIXME Debugging start
+#ifdef DEBUG_PRINTF
 	printf("m: "); mpz_out_str(stdout, 10, m); printf("\n");
 	printf("u: %zi\n", u);
 	printf("t: "); mpz_out_str(stdout, 10, t); printf("\n");
-	// FIXME Debugging end
+#endif /* DEBUG_PRINTF */
 
 	do {
 		ABORT_IF( random_bits(out, u) < 0 );
-
-		// FIXME Debugging start
+#ifdef DEBUG_PRINTF
 		printf("x: "); mpz_out_str(stdout, 10, out); printf("\n");
-		// FIXME Debugging end
+#endif /* DEBUG_PRINTF */
 	} while(mpz_cmp(out, t) >= 0);
 
 	mpz_mod(out, out, m);
 	retval = 0;
 
-	// FIXME Debugging start
+#ifdef DEBUG_PRINTF
 	printf("r: "); mpz_out_str(stdout, 10, out); printf("\n");
-	// FIXME Debugging end
+#endif /* DEBUG_PRINTF */
 
 abort:
 	mpz_clear(t);
@@ -374,7 +375,7 @@ int trsa_key_generate(trsa_ctx ctx, unsigned int numbits, unsigned int t, unsign
 
 	// FIXME Generate verification values
 
-	// FIXME Debugging start
+#ifdef DEBUG_PRINTF
 	printf("q: "); mpz_out_str(stdout, 10, ctx->q); printf("\n");
 	printf("p: "); mpz_out_str(stdout, 10, ctx->p); printf("\n");
 	printf("n: "); mpz_out_str(stdout, 10, ctx->n); printf("\n");
@@ -387,7 +388,7 @@ int trsa_key_generate(trsa_ctx ctx, unsigned int numbits, unsigned int t, unsign
 	for(int i=1; i<=l; i++) {
 		printf("s_%i: ", i); mpz_out_str(stdout, 10, ctx->s[i-1]); printf("\n");
 	}
-	// FIXME Debugging end
+#endif /* DEBUG_PRINTF */
 
 	retval = 0;
 
@@ -879,10 +880,11 @@ int trsa_op_pub(trsa_ctx ctx, mpz_t in, mpz_t out)
 	METHOD_START(ctx, .need = CTX_PUBLIC);
 
 	mpz_powm_sec(out, in, ctx->e, ctx->n);
-	// FIXME Debugging start
+
+#ifdef DEBUG_PRINTF
 	printf("pub in: "); mpz_out_str(stdout, 10, in); printf("\n");
 	printf("pub out: "); mpz_out_str(stdout, 10, out); printf("\n");
-	// FIXME Debugging end
+#endif /* DEBUG_PRINTF */
 
 	return METHOD_FINISH(ctx, 0, 0);
 }
@@ -932,7 +934,9 @@ static void lambda_S0j(mpz_t out, mpz_t *x_, int l, int j)
 			continue;
 		}
 		if(i == j) continue;
+#ifdef DEBUG_PRINTF
 		printf("do %i\n", i);
+#endif /* DEBUG_PRINTF */
 		mpz_mul_ui(out, out, i);
 	}
 	for(int i=1; i<=l; i++) {
@@ -947,7 +951,9 @@ static void lambda_S0j(mpz_t out, mpz_t *x_, int l, int j)
 			mpz_divexact_ui(out, out, i-j);
 		}
 	}
+#ifdef DEBUG_PRINTF
 	printf("lambda(%i): ", j); mpz_out_str(stdout, 10, out); printf("\n");
+#endif /* DEBUG_PRINTF */
 }
 
 int trsa_op_combine_do(trsa_ctx ctx, mpz_t in, mpz_t out)
@@ -967,12 +973,13 @@ int trsa_op_combine_do(trsa_ctx ctx, mpz_t in, mpz_t out)
 		lambda_S0j(tmp, ctx->x_, ctx->l, j);
 		mpz_mul_ui(tmp, tmp, 2);
 
-		// TODO Insecure?
-		// FIXME Debugging start
+#ifdef DEBUG_PRINTF
 		printf("base: "); mpz_out_str(stdout, 10, ctx->x_[j-1]); printf("\n");
 		printf("exp: "); mpz_out_str(stdout, 10, tmp); printf("\n");
 		printf("mod: "); mpz_out_str(stdout, 10, ctx->n); printf("\n");
-		// FIXME Debugging end
+#endif /* DEBUG_PRINTF */
+
+		// TODO Insecure?
 		mpz_powm(tmp, ctx->x_[j-1], tmp, ctx->n);
 		mpz_mul(w, w, tmp);
 		mpz_mod(w, w, ctx->n);
@@ -992,12 +999,12 @@ int trsa_op_combine_do(trsa_ctx ctx, mpz_t in, mpz_t out)
 	mpz_mul(out, out, tmp);
 	mpz_mod(out, out, ctx->n);
 
-	// FIXME Debugging start
+#ifdef DEBUG_PRINTF
 	printf("a: "); mpz_out_str(stdout, 10, a); printf("\n");
 	printf("b: "); mpz_out_str(stdout, 10, b); printf("\n");
 	printf("w: "); mpz_out_str(stdout, 10, w); printf("\n");
 	printf("out: "); mpz_out_str(stdout, 10, out); printf("\n");
-	// FIXME Debugging end
+#endif /* DEBUG_PRINTF */
 
 	retval = 0;
 
