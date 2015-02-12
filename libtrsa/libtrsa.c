@@ -451,22 +451,19 @@ abort:
 	FINISH(CTX_PUBLIC | CTX_PRIVATE | CTX_SHARES);
 }
 
-int trsa_share_get(trsa_ctx ctx, unsigned int i, uint8_t **data, size_t *data_length) {
+int trsa_share_get(trsa_ctx ctx, uint16_t i, uint8_t **data, size_t *data_length) {
 	START(.need = CTX_PUBLIC | CTX_SHARES);
 
 	if(!data || !data_length) {
 		return -1;
 	}
 
-	// FIXME: Allow to iterate by using i=0
 	if(i < 1 || i > ctx->l) {
 		return -1;
 	}
 
-	uint16_t i16 = i;// FIXME: range of i
-
 	buffer_t buffer = buffer_alloc_put(
-		BUFFER_FORMAT_SHARE(ctx, i16, ctx->s[i16-1])
+		BUFFER_FORMAT_SHARE(ctx, i, ctx->s[i-1])
 	);
 	ABORT_IF(!buffer);
 
