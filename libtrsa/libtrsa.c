@@ -8,6 +8,7 @@
 
 #include <openssl/evp.h>
 #include <openssl/rand.h>
+#include <openssl/crypto.h>
 
 #include "buffer.h"
 #include "libtrsa.h"
@@ -217,36 +218,35 @@ static void evaluate_poly(mpz_t rop, mpz_t *c, unsigned int order, unsigned long
  */
 static int random_bits(mpz_t out, size_t b)
 {
-	// FIXME Improve by retrieving more than one byte at a time
-	uint8_t buffer;
+	uint8_t *buffer = NULL;
+	int retval = -1;
 	mpz_set_ui(out, 0);
 
-	while(b > 8) {
-		if(RAND_bytes(&buffer, sizeof(buffer)) != 1) {
-			return -1;
-		}
-		mpz_mul_2exp(out, out, 8);
-		mpz_add_ui(out, out, buffer);
-
-		b -= 8;
+	uint8_t final_mask = 0xFF;
+	size_t full_byte_count = b / 8;
+	if(b % 8) {
+		full_byte_count ++;
+		final_mask = ~((~0L)<<(b%8));
 	}
 
-	if(b > 0) {
-		if(RAND_bytes(&buffer, sizeof(buffer)) != 1) {
-			return -1;
-		}
-		mpz_mul_2exp(out, out, b);
+	buffer = malloc(full_byte_count);
+	ABORT_IF(!buffer);
 
-		buffer >>= (8-b);
+	ABORT_IF( RAND_bytes(buffer, full_byte_count) != 1 );
 
-		mpz_add_ui(out, out, buffer);
+	buffer[full_byte_count-1] &= final_mask;
 
-		b -= b;
+	mpz_import(out, full_byte_count, -1, 1, -1, 0, buffer);
+
+	retval = 0;
+
+abort:
+	if(buffer) {
+		OPENSSL_cleanse(buffer, sizeof(buffer));
+		free(buffer);
 	}
 
-	buffer = 0;
-
-	return 0;
+	return retval;
 }
 
 /*
