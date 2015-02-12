@@ -27,7 +27,47 @@ struct trsa_context {
 	mpz_t p, q, n, e, d;
 	mpz_t *s, *x_, my_s,  y_challenge;
 	int t, l, my_i;
+
+	uint32_t have_set;
+	uint32_t state;
 };
+
+#define CTX_PUBLIC        (1L<<0)
+#define CTX_PRIVATE       (1L<<1)
+#define CTX_SHARES        (1L<<2)
+#define CTX_MY_SHARE      (1L<<3)
+#define CTX_PARTIALS      (1L<<4)
+#define CTX_CHALLENGE     (1L<<5)
+
+#define CTX_ALL           (CTX_PUBLIC|CTX_PRIVATE|CTX_SHARES|CTX_MY_SHARE|CTX_PARTIALS|CTX_CHALLENGE)
+
+#define STATE_NONE        (1L<<0)
+#define STATE_DEC_PREP    (1L<<1)
+#define STATE_DEC_READY   (1L<<2)
+
+#define METHOD_START(ctx, ...) do { \
+	if(ctx_require(ctx, (struct ctx_require_arguments){__VA_ARGS__}) < 0) \
+		return -1; \
+} while(0)
+
+#define METHOD_FINISH(ctx, retval, ...) ctx_provide(ctx, retval, (struct ctx_provide_arguments){__VA_ARGS__})
+
+#define START(...)  METHOD_START(ctx, __VA_ARGS__); int retval = -1
+#define FINISH(...) return METHOD_FINISH(ctx, retval, __VA_ARGS__)
+#define ABORT_IF_ERROR(r) do { if(r<0){retval=r; goto abort;} } while(0)
+
+struct ctx_require_arguments {
+	uint32_t need, clear;
+	uint32_t need_state;
+};
+
+struct ctx_provide_arguments {
+	uint32_t provide;
+	uint32_t state, state_good, state_error;
+};
+
+static int ctx_require(trsa_ctx ctx, struct ctx_require_arguments args);
+static int ctx_provide(trsa_ctx ctx, int retval, struct ctx_provide_arguments args);
 
 trsa_ctx trsa_init ()
 {
@@ -40,6 +80,34 @@ trsa_ctx trsa_init ()
 
 
 	return ctx;
+}
+
+int trsa_fini(trsa_ctx ctx)
+{
+	if(!ctx) {
+		return -1;
+	}
+
+
+	mpz_clears(ctx->p, ctx->q, ctx->n, ctx->e, ctx->d, ctx->my_s, ctx->y_challenge, NULL);
+
+	if(ctx->s != NULL) {
+		for(int i=0; i<ctx->l; i++) {
+			mpz_clear(ctx->s[i]);
+		}
+		free(ctx->s);
+	}
+
+	if(ctx->x_ != NULL) {
+		for(int i=0; i<ctx->l; i++) {
+			mpz_clear(ctx->x_[i]);
+		}
+		free(ctx->x_);
+	}
+
+	/* FIXME: Check if cleaning up actually destroys memory */
+	free(ctx);
+	return 0;
 }
 
 static unsigned int FIRST_PRIMES[] = {2, 3, 5, 7, 11, 13, 17, 19, 23, 29,
@@ -197,11 +265,7 @@ abort:
 
 int trsa_key_generate(trsa_ctx ctx, unsigned int numbits, unsigned int t, unsigned int l)
 {
-	if(!ctx) {
-		return -1;
-	}
-
-	int retval = -1;
+	START(.clear=CTX_ALL);
 
 	int qlength = numbits/2;
 	int plength = numbits - qlength;
@@ -211,8 +275,6 @@ int trsa_key_generate(trsa_ctx ctx, unsigned int numbits, unsigned int t, unsign
 	ctx->t = t;
 	ctx->l = l;
 	ctx->s = NULL;
-	// FIXME: Guard against memory leak in case of repeated calls
-	//   Note: All functions should declare what they need and what they will clobber, then set what they generated
 
 	mpz_inits(phi_n, pminus, qminus, delta, c_max, tmp, tmp2, NULL);
 
@@ -362,39 +424,9 @@ abort:
 		free(ctx->s);
 	}
 
-	return retval;
+	FINISH(CTX_PUBLIC | CTX_PRIVATE | CTX_SHARES);
 }
 
-
-int trsa_fini(trsa_ctx ctx)
-{
-	if(!ctx) {
-		return -1;
-	}
-
-
-	mpz_clears(ctx->p, ctx->q, ctx->n, ctx->e, ctx->d, ctx->my_s, ctx->y_challenge, NULL);
-
-	if(ctx->s != NULL) {
-		for(int i=0; i<ctx->l; i++) {
-			mpz_clear(ctx->s[i]);
-		}
-		free(ctx->s);
-	}
-
-	if(ctx->x_ != NULL) {
-		for(int i=0; i<ctx->l; i++) {
-			mpz_clear(ctx->x_[i]);
-		}
-		free(ctx->x_);
-	}
-
-	/* FIXME: Check if cleaning up actually destroys memory */
-	free(ctx);
-	return 0;
-}
-
-#define ABORT_IF_ERROR(r) do { if(r<0){retval=r; goto abort;} } while(0)
 
 static int dump_magic(buffer_t b, const char *magic)
 {
@@ -500,7 +532,9 @@ static int read_public(buffer_t b, trsa_ctx ctx)
 }
 
 int trsa_share_get(trsa_ctx ctx, unsigned int i, uint8_t **data, size_t *data_length) {
-	if(!ctx || !data || !data_length) {
+	START(.need = CTX_PUBLIC | CTX_SHARES);
+
+	if(!data || !data_length) {
 		return -1;
 	}
 
@@ -514,7 +548,6 @@ int trsa_share_get(trsa_ctx ctx, unsigned int i, uint8_t **data, size_t *data_le
 	}
 
 	// Write out public parameters, followed by private share parameters i, ctx->s[i-1]
-	int retval = -1;
 	size_t size_estimate = MAGIC_SIZE;
 	size_estimate += estimate_size_public(ctx);
 	size_estimate += estimate_size_mpz(ctx->s[i-1]);
@@ -542,16 +575,17 @@ int trsa_share_get(trsa_ctx ctx, unsigned int i, uint8_t **data, size_t *data_le
 abort:
 	buffer_free(buffer);
 
-	return retval;
+	FINISH(0);
 }
 
 int trsa_share_set(trsa_ctx ctx, const uint8_t *data, size_t data_length) {
-	if(!ctx || !data || !data_length) {
+	START(.clear = CTX_PUBLIC | CTX_MY_SHARE);
+
+	if(!data || !data_length) {
 		return -1;
 	}
 
 	// Read in public parameters, followed by private share parameters my_i, ctx->my_s
-	int retval = -1;
 
 	buffer_t buffer = buffer_init(data, data_length);
 	if(!buffer) {
@@ -577,7 +611,7 @@ int trsa_share_set(trsa_ctx ctx, const uint8_t *data, size_t data_length) {
 abort:
 	buffer_free(buffer);
 
-	return retval;
+	FINISH(CTX_PUBLIC | CTX_MY_SHARE);
 }
 
 
@@ -621,11 +655,12 @@ int trsa_encrypt_generate(trsa_ctx ctx,
 		uint8_t *session_key, size_t session_key_length,
 		uint8_t **encrypted_session_key, size_t *encrypted_session_key_length) {
 
-	if(!ctx || !session_key || !encrypted_session_key || !encrypted_session_key_length) {
+	START(.need = CTX_PUBLIC);
+
+	if(!session_key || !encrypted_session_key || !encrypted_session_key_length) {
 		return -1;
 	}
 
-	int retval = -1;
 	mpz_t x, y;
 	buffer_t x_buffer = NULL, buffer = NULL;
 
@@ -663,18 +698,19 @@ abort:
 	buffer_free(x_buffer);
 	buffer_free(buffer);
 
-	return retval;
+	FINISH(0);
 }
 
 int trsa_decrypt_prepare(trsa_ctx ctx,
 		const uint8_t *encrypted_session_key, size_t encrypted_session_key_length,
 		uint8_t **challenge, size_t *challenge_length) {
 
-	if(!ctx || !encrypted_session_key || !challenge || !challenge_length) {
+	START(.clear = CTX_PUBLIC | CTX_PARTIALS | CTX_CHALLENGE);
+
+	if(!encrypted_session_key || !challenge || !challenge_length) {
 		return -1;
 	}
 
-	int retval = -1;
 	mpz_t y;
 	buffer_t buffer = NULL, output = NULL;
 
@@ -721,18 +757,19 @@ abort:
 	buffer_free(buffer);
 	buffer_free(output);
 
-	return retval;
+	FINISH(CTX_PUBLIC | CTX_CHALLENGE, .state_good=STATE_DEC_PREP);
 }
 
 int trsa_decrypt_partial(trsa_ctx ctx,
 		const uint8_t *challenge, size_t challenge_length,
 		uint8_t **response, size_t *response_length) {
 
-	if(!ctx || !challenge || !response || !response_length) {
+	START(.need = CTX_PUBLIC | CTX_MY_SHARE);
+
+	if(!challenge || !response || !response_length) {
 		return -1;
 	}
 
-	int retval = -1;
 	mpz_t y_challenge, x_partial;
 	buffer_t in = NULL, out = NULL;
 
@@ -769,17 +806,19 @@ abort:
 	mpz_clears(y_challenge, x_partial, NULL);
 	buffer_free(in);
 	buffer_free(out);
-	return retval;
+
+	FINISH(0);
 }
 
 int trsa_decrypt_contribute(trsa_ctx ctx,
 		const uint8_t *response, size_t response_length) {
 
-	if(!ctx || !response) {
+	START(.need_state=STATE_DEC_PREP | STATE_DEC_READY);
+
+	if(!response) {
 		return -1;
 	}
 
-	int retval = -1;
 	uint16_t i;
 	mpz_t x_partial;
 	buffer_t buffer = NULL;
@@ -806,17 +845,19 @@ int trsa_decrypt_contribute(trsa_ctx ctx,
 abort:
 	mpz_clear(x_partial);
 	buffer_free(buffer);
-	return retval;
+
+	FINISH(.state_good=STATE_DEC_READY);
 }
 
 int trsa_decrypt_finish(trsa_ctx ctx,
 		uint8_t *session_key, size_t session_key_length) {
 
-	if(!ctx || !session_key) {
+	START(.need = CTX_PUBLIC | CTX_CHALLENGE, .need_state=STATE_DEC_READY);
+
+	if(!session_key) {
 		return -1;
 	}
 
-	int retval = -1;
 	mpz_t x;
 	buffer_t x_buffer = NULL, buffer = NULL;
 
@@ -845,20 +886,18 @@ abort:
 	mpz_clear(x);
 	buffer_free(x_buffer);
 	buffer_free(buffer);
-	return retval;
+
+	FINISH(.state=STATE_NONE);
 }
 
 int trsa_pubkey_get(trsa_ctx ctx, uint8_t **data, size_t *data_length) {
-	if(!ctx || !data || !data_length) {
+	START(.need = CTX_PUBLIC);
+
+	if(!data || !data_length) {
 		return -1;
 	}
 
-	if(*data || *data_length) {
-		return -1; // Not implemented yet
-	}
-
 	// Write out public parameters
-	int retval = -1;
 	size_t size_estimate = MAGIC_SIZE;
 	size_estimate += estimate_size_public(ctx);
 
@@ -879,16 +918,17 @@ int trsa_pubkey_get(trsa_ctx ctx, uint8_t **data, size_t *data_length) {
 abort:
 	buffer_free(buffer);
 
-	return retval;
+	FINISH(0);
 }
 
 int trsa_pubkey_set(trsa_ctx ctx, const uint8_t *data, size_t data_length) {
-	if(!ctx || !data || !data_length) {
+	START(.clear = CTX_ALL);
+
+	if(!data || !data_length) {
 		return -1;
 	}
 
 	// Read in public parameters
-	int retval = -1;
 
 	buffer_t buffer = buffer_init(data, data_length);
 	if(!buffer) {
@@ -906,15 +946,13 @@ int trsa_pubkey_set(trsa_ctx ctx, const uint8_t *data, size_t data_length) {
 abort:
 	buffer_free(buffer);
 
-	return retval;
+	FINISH(CTX_PUBLIC);
 }
 
 
 int trsa_op_pub(trsa_ctx ctx, mpz_t in, mpz_t out)
 {
-	if(!ctx) {
-		return -1;
-	}
+	METHOD_START(ctx, .need = CTX_PUBLIC);
 
 	mpz_powm_sec(out, in, ctx->e, ctx->n);
 	// FIXME Debugging start
@@ -922,14 +960,15 @@ int trsa_op_pub(trsa_ctx ctx, mpz_t in, mpz_t out)
 	printf("pub out: "); mpz_out_str(stdout, 10, out); printf("\n");
 	// FIXME Debugging end
 
-	return 0;
+	return METHOD_FINISH(ctx, 0, 0);
 }
 
 int trsa_op_partial(trsa_ctx ctx, mpz_t in, mpz_t out)
 {
+	METHOD_START(ctx, .need = CTX_PUBLIC | CTX_MY_SHARE);
+
 	mpz_t exponent;
 	mpz_init(exponent);
-	int retval = -1;
 
 	// exponent = (2 delta)
 	mpz_fac_ui(exponent, ctx->l);
@@ -938,15 +977,15 @@ int trsa_op_partial(trsa_ctx ctx, mpz_t in, mpz_t out)
 	mpz_powm_sec(out, in, exponent, ctx->n);
 	mpz_powm_sec(out, out, ctx->my_s, ctx->n);
 
-	retval = 0;
-
 	mpz_clear(exponent);
-	return retval;
+
+	return METHOD_FINISH(ctx, 0, 0);
 }
 
 int trsa_op_combine_set(trsa_ctx ctx, unsigned int i, mpz_t in)
 {
-	int retval = -1;
+	START(0);
+
 	if(!ctx->x_) {
 		ctx->x_ = calloc(ctx->l, sizeof(*ctx->x_));
 		if(!ctx->x_) {
@@ -962,7 +1001,7 @@ int trsa_op_combine_set(trsa_ctx ctx, unsigned int i, mpz_t in)
 	retval = 0;
 
 abort:
-	return retval;
+	FINISH(CTX_PARTIALS);
 }
 
 static void lambda_S0j(mpz_t out, mpz_t *x_, int l, int j)
@@ -993,7 +1032,8 @@ static void lambda_S0j(mpz_t out, mpz_t *x_, int l, int j)
 
 int trsa_op_combine_do(trsa_ctx ctx, mpz_t in, mpz_t out)
 {
-	int retval = -1;
+	START(.need = CTX_PUBLIC);
+
 	mpz_t a, b, w, tmp;
 	mpz_inits(a, b, w, tmp, NULL);
 
@@ -1045,5 +1085,26 @@ int trsa_op_combine_do(trsa_ctx ctx, mpz_t in, mpz_t out)
 
 abort:
 	mpz_clears(a, b, w, tmp, NULL);
-	return retval;
+
+	FINISH(0);
+}
+
+
+static int ctx_require(trsa_ctx ctx, struct ctx_require_arguments args)
+{
+	if(!ctx) {
+		return -1;
+	}
+	// FIXME Implement remainder
+	return 0;
+}
+
+
+static int ctx_provide(trsa_ctx ctx, int retval, struct ctx_provide_arguments args)
+{
+	if(!ctx) {
+		return -1;
+	}
+	// FIXME Implement remainder
+	return 0;
 }
