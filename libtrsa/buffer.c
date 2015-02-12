@@ -38,6 +38,41 @@ static int ensure_space(struct buffer *b, size_t length)
 	return 0;
 }
 
+static size_t estimate_size(const struct buffer_description *data)
+{
+	size_t s = 0;
+	if(!data) {
+		return 0;
+	}
+
+	while(data->type != BUFFER_DESCRIPTION_TYPE_NULL) {
+		switch(data->type) {
+		case BUFFER_DESCRIPTION_TYPE_NULL: break;
+		case BUFFER_DESCRIPTION_TYPE_BYTES:
+			if(data->data.bytes.data_length) {
+				s += *(data->data.bytes.data_length);
+			}
+			break;
+		case BUFFER_DESCRIPTION_TYPE_FIXED_BYTES:
+			s += data->data.fixed_bytes.data_length;
+			break;
+		case BUFFER_DESCRIPTION_TYPE_UINT16:
+			s += 2;
+			break;
+		case BUFFER_DESCRIPTION_TYPE_MPZ:
+			s += 2;
+			if(data->data.mpz) {
+				s += (mpz_sizeinbase (*(data->data.mpz), 2) + 7) / 8;
+			}
+			break;
+		}
+
+		data++;
+	}
+
+	return s;
+}
+
 int buffer_put_uint16(buffer_t b, uint16_t data)
 {
 	int r = ensure_space(b, 2);
@@ -207,6 +242,21 @@ buffer_t buffer_init(const uint8_t *data, size_t data_length)
 	return b;
 }
 
+buffer_t buffer_alloc_put_(const struct buffer_description *data)
+{
+	size_t size_estimate = estimate_size(data);
+	struct buffer *b = buffer_alloc(size_estimate);
+	if(!b) {
+		return NULL;
+	}
+
+	if(buffer_put_(b, data) < 0) {
+		buffer_free(b);
+		b = NULL;
+	}
+	return b;
+}
+
 
 void buffer_free(buffer_t b)
 {
@@ -236,4 +286,98 @@ void buffer_give_up(buffer_t *b, uint8_t **data, size_t *data_length)
 
 	free(*b);
 	*b = NULL;
+}
+
+int buffer_put_(buffer_t b, const struct buffer_description *data)
+{
+	if(!b || !data) {
+		return -1;
+	}
+
+	int retval = 0;
+
+	while(data->type != BUFFER_DESCRIPTION_TYPE_NULL) {
+		switch(data->type) {
+		case BUFFER_DESCRIPTION_TYPE_NULL: break;
+		case BUFFER_DESCRIPTION_TYPE_BYTES:
+			if(!data->data.bytes.data || !data->data.bytes.data_length) {
+				retval = -1;
+			} else {
+				retval = buffer_put_bytes(b, *data->data.bytes.data, *data->data.bytes.data_length);
+			}
+			break;
+		case BUFFER_DESCRIPTION_TYPE_FIXED_BYTES:
+			retval = buffer_put_bytes(b, data->data.fixed_bytes.data, data->data.fixed_bytes.data_length);
+			break;
+		case BUFFER_DESCRIPTION_TYPE_UINT16:
+			retval = buffer_put_uint16(b, *data->data.uint16);
+			break;
+		case BUFFER_DESCRIPTION_TYPE_MPZ:
+			if(!data->data.mpz) {
+				retval = -1;
+			} else {
+				retval = buffer_put_mpz(b, *data->data.mpz);
+			}
+			break;
+		}
+
+		if(retval < 0) {
+			break;
+		}
+
+		data++;
+	}
+
+	return retval;
+}
+
+int buffer_get_(buffer_t b, const struct buffer_description *data)
+{
+	if(!b || !data) {
+		return -1;
+	}
+
+	int retval = 0;
+
+	while(data->type != BUFFER_DESCRIPTION_TYPE_NULL) {
+		switch(data->type) {
+		case BUFFER_DESCRIPTION_TYPE_NULL: break;
+		case BUFFER_DESCRIPTION_TYPE_BYTES:
+			if(!data->data.bytes.data || !data->data.bytes.data_length) {
+				retval = -1;
+			} else {
+				retval = buffer_get_bytes(b, data->data.bytes.data, *(data->data.bytes.data_length));
+			}
+			break;
+		case BUFFER_DESCRIPTION_TYPE_FIXED_BYTES:
+			{
+				const uint8_t *tmp;
+				retval = buffer_get_bytes(b, &tmp, data->data.fixed_bytes.data_length);
+				if(retval >= 0) {
+					if(memcmp(tmp, data->data.fixed_bytes.data, data->data.fixed_bytes.data_length) != 0) {
+						retval = -1;
+					}
+				}
+			}
+			break;
+		case BUFFER_DESCRIPTION_TYPE_UINT16:
+			retval = buffer_get_uint16(b, data->data.uint16);
+			break;
+		case BUFFER_DESCRIPTION_TYPE_MPZ:
+			if(!data->data.mpz) {
+				retval = -1;
+			} else {
+				retval = buffer_get_mpz(b, *data->data.mpz);
+			}
+			break;
+		}
+
+		if(retval < 0) {
+			break;
+		}
+
+		data++;
+	}
+
+	return retval;
 }
