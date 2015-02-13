@@ -20,14 +20,16 @@
 #define PBKDF2_ITERATIONS 1000
 #define PBKDF2_DIGEST EVP_sha512()
 #define MAXIMUM_SESSION_KEY_LENGTH 60000
+#define MAXIMUM_UINT16 65535
 
 #define MAGIC_SIZE 8
 #define MAGIC_SHARE   "TRSAs\r\n\x00"
 #define MAGIC_PUBKEY  "TRSAp\r\n\x00"
 #define MAGIC_KEMKEY  "TRSAk\r\n\x00"
 
-/* Public components: l, n, e */
+/* Public components: t, l, n, e */
 #define BUFFER_FORMAT_PUBLIC(ctx) \
+	BUFFER_FORMAT_UINT16(ctx->t), \
 	BUFFER_FORMAT_UINT16(ctx->l), \
 	BUFFER_FORMAT_MPZ(ctx->n), \
 	BUFFER_FORMAT_MPZ(ctx->e)
@@ -108,12 +110,13 @@ struct ctx_require_arguments {
 
 struct ctx_provide_arguments {
 	uint32_t provide;
-	uint32_t state, state_good, state_error;
+	uint32_t state, state_success, state_error;
 	uint32_t clear;
 };
 
 static int ctx_require(trsa_ctx ctx, struct ctx_require_arguments args);
 static int ctx_provide(trsa_ctx ctx, int retval, struct ctx_provide_arguments args);
+static int ctx_clear(trsa_ctx ctx, uint32_t clear);
 
 trsa_ctx trsa_init ()
 {
@@ -124,6 +127,7 @@ trsa_ctx trsa_init ()
 
 	mpz_inits(ctx->p, ctx->q, ctx->n, ctx->e, ctx->d, ctx->my_s, ctx->y_challenge, NULL);
 
+	ctx->state = STATE_NONE;
 
 	return ctx;
 }
@@ -134,25 +138,11 @@ int trsa_fini(trsa_ctx ctx)
 		return -1;
 	}
 
-
-	mpz_clears(ctx->p, ctx->q, ctx->n, ctx->e, ctx->d, ctx->my_s, ctx->y_challenge, NULL);
-
-	if(ctx->s != NULL) {
-		for(int i=0; i<ctx->l; i++) {
-			mpz_clear(ctx->s[i]);
-		}
-		free(ctx->s);
-	}
-
-	if(ctx->x_ != NULL) {
-		for(int i=0; i<ctx->l; i++) {
-			mpz_clear(ctx->x_[i]);
-		}
-		free(ctx->x_);
-	}
-
 	/* FIXME: Check if cleaning up actually destroys memory */
+	ctx_clear(ctx, CTX_ALL);
+	mpz_clears(ctx->p, ctx->q, ctx->n, ctx->e, ctx->d, ctx->my_s, ctx->y_challenge, NULL);
 	free(ctx);
+
 	return 0;
 }
 
@@ -303,20 +293,25 @@ int trsa_key_generate(trsa_ctx ctx, unsigned int numbits, unsigned int t, unsign
 {
 	START(.clear=CTX_ALL);
 
-	int qlength = numbits/2;
-	int plength = numbits - qlength;
+	unsigned int qlength = numbits/2;
+	unsigned int plength = numbits - qlength;
 	mpz_t phi_n, pminus, qminus, delta, c_max, tmp, tmp2;
 	mpz_t *c = NULL;
 
+	mpz_inits(phi_n, pminus, qminus, delta, c_max, tmp, tmp2, NULL);
+
+	ABORT_IF(t < 1 || t > MAXIMUM_UINT16);
+	ABORT_IF(l < 1 || l > MAXIMUM_UINT16);
+	ABORT_IF(t+1 > l);
+	ABORT_IF(numbits < 0);
+
 	ctx->t = t;
 	ctx->l = l;
-	ctx->s = NULL;
-
-	mpz_inits(phi_n, pminus, qminus, delta, c_max, tmp, tmp2, NULL);
 
 	ABORT_IF_ERROR( random_bits(ctx->p, plength) );
 	ABORT_IF_ERROR( random_bits(ctx->q, qlength) );
 
+	// Set least and most significant bits to get an odd number of maximal bit length
 	mpz_setbit(ctx->p, 0);
 	mpz_setbit(ctx->p, plength-1);
 
@@ -358,13 +353,13 @@ int trsa_key_generate(trsa_ctx ctx, unsigned int numbits, unsigned int t, unsign
 
 	retries = PRIME_GENERATION_RETRIES;
 	do {
-		// GCD(e, 4*DELTA^2)
+		// tmp = GCD(e, 4*DELTA^2)
 		mpz_fac_ui(delta, l);
 		mpz_mul(tmp2, delta, delta);
 		mpz_mul_ui(tmp2, tmp2, 4);
 		mpz_gcd(tmp, ctx->e, tmp2);
 
-		// GCD(e, phi_n)
+		// tmp2 = GCD(e, phi_n)
 		mpz_gcd(tmp2, ctx->e, phi_n);
 
 		if(mpz_cmp_ui(tmp, 1) == 0 && mpz_cmp_ui(tmp2, 1) == 0) {
@@ -382,7 +377,6 @@ int trsa_key_generate(trsa_ctx ctx, unsigned int numbits, unsigned int t, unsign
 	mpz_mul(c_max, c_max, ctx->n);
 	mpz_mul_2exp(c_max, c_max, t);
 	mpz_mul_2exp(c_max, c_max, SECONDARY_SECURITY_PARAMETER);
-
 
 	c = calloc(t+1, sizeof(*c));
 	ABORT_IF(!c);
@@ -438,17 +432,10 @@ abort:
 	}
 	free(c);
 
-	if(ctx->s != NULL && retval < 0) {
-		for(int i=0; i<l; i++) {
-			mpz_clear(ctx->s[i]);
-		}
-		free(ctx->s);
-	}
-
 	FINISH(CTX_PUBLIC | CTX_PRIVATE | CTX_SHARES);
 }
 
-int trsa_share_get(trsa_ctx ctx, uint16_t i, uint8_t **data, size_t *data_length) {
+int trsa_share_get(trsa_ctx ctx, unsigned int i, uint8_t **data, size_t *data_length) {
 	START(.need = CTX_PUBLIC | CTX_SHARES);
 
 	if(!data || !data_length) {
@@ -459,8 +446,10 @@ int trsa_share_get(trsa_ctx ctx, uint16_t i, uint8_t **data, size_t *data_length
 		return -1;
 	}
 
+	uint16_t i16 = i;
+
 	buffer_t buffer = buffer_alloc_put(
-		BUFFER_FORMAT_SHARE(ctx, i, ctx->s[i-1])
+		BUFFER_FORMAT_SHARE(ctx, i16, ctx->s[i-1])
 	);
 	ABORT_IF(!buffer);
 
@@ -687,7 +676,7 @@ abort:
 	mpz_clear(x_partial);
 	buffer_free(buffer);
 
-	FINISH(.state_good=STATE_DEC_READY);
+	FINISH(.state_success=STATE_DEC_READY);
 }
 
 int trsa_decrypt_finish(trsa_ctx ctx,
@@ -905,14 +894,76 @@ abort:
 	FINISH(0, .clear = CTX_PARTIALS);
 }
 
+static int ctx_clear(trsa_ctx ctx, uint32_t clear)
+{
+	if(!ctx) {
+		return -1;
+	}
+
+	/* Clearing CTX_CHALLENGE also clears CTX_PARTIALS */
+	if(clear & CTX_CHALLENGE) clear |= CTX_PARTIALS;
+
+
+	if(clear & CTX_PUBLIC) {
+		mpz_set_ui(ctx->n, 0);
+		mpz_set_ui(ctx->e, 0);
+	}
+
+	if(clear & CTX_PRIVATE) {
+		mpz_set_ui(ctx->p, 0);
+		mpz_set_ui(ctx->q, 0);
+		mpz_set_ui(ctx->d, 0);
+	}
+
+	if(clear & CTX_SHARES) {
+		if(ctx->s != NULL) {
+			for(int i=0; i<ctx->l; i++) {
+				mpz_clear(ctx->s[i]);
+			}
+			free(ctx->s);
+		}
+		ctx->s = NULL;
+	}
+
+	if(clear & CTX_PARTIALS) {
+		if(ctx->x_ != NULL) {
+			for(int i=0; i<ctx->l; i++) {
+				mpz_clear(ctx->x_[i]);
+			}
+			free(ctx->x_);
+		}
+		ctx->x_ = NULL;
+	}
+
+	if(clear & CTX_CHALLENGE) {
+		mpz_set_ui(ctx->y_challenge, 0);
+	}
+
+	if(clear & CTX_MY_SHARE) {
+		mpz_set_ui(ctx->my_s, 0);
+		ctx->my_i = 0;
+	}
+
+	ctx->have &= ~clear;
+	return 0;
+}
+
 
 static int ctx_require(trsa_ctx ctx, struct ctx_require_arguments args)
 {
 	if(!ctx) {
 		return -1;
 	}
-	// FIXME Implement remainder
-	return 0;
+
+	if( (args.need & ctx->have) != args.need ) {
+		return -1;
+	}
+
+	if( args.need_state && !(args.need_state & ctx->state) ) {
+		return -1;
+	}
+
+	return ctx_clear(ctx, args.clear);
 }
 
 
@@ -921,6 +972,22 @@ static int ctx_provide(trsa_ctx ctx, int retval, struct ctx_provide_arguments ar
 	if(!ctx) {
 		return -1;
 	}
-	// FIXME Implement remainder
-	return 0;
+
+	if(retval < 0) {
+		ctx_clear(ctx, args.provide);
+		if(args.state_error) {
+			ctx->state = args.state_error;
+		}
+	} else {
+		ctx->have |= args.provide;
+		if(args.state_success) {
+			ctx->state = args.state_success;
+		}
+	}
+
+	if(args.state) {
+		ctx->state = args.state;
+	}
+
+	return retval;
 }
