@@ -70,7 +70,7 @@
 
 struct trsa_context {
 	mpz_t p, q, n, e, d;
-	mpz_t *s, *x_, my_s,  y_challenge;
+	mpz_t *s, *x_, my_s,  r, y_challenge;
 	uint16_t t, l, my_i;   // FIXME Audit all uses for correctness with uint16_t instead of int
 
 	uint32_t have;
@@ -125,7 +125,7 @@ trsa_ctx trsa_init ()
 		return NULL;
 	}
 
-	mpz_inits(ctx->p, ctx->q, ctx->n, ctx->e, ctx->d, ctx->my_s, ctx->y_challenge, NULL);
+	mpz_inits(ctx->p, ctx->q, ctx->n, ctx->e, ctx->d, ctx->my_s, ctx->r, ctx->y_challenge, NULL);
 
 	ctx->state = STATE_NONE;
 
@@ -140,7 +140,7 @@ int trsa_fini(trsa_ctx ctx)
 
 	/* FIXME: Check if cleaning up actually destroys memory */
 	ctx_clear(ctx, CTX_ALL);
-	mpz_clears(ctx->p, ctx->q, ctx->n, ctx->e, ctx->d, ctx->my_s, ctx->y_challenge, NULL);
+	mpz_clears(ctx->p, ctx->q, ctx->n, ctx->e, ctx->d, ctx->my_s, ctx->r, ctx->y_challenge, NULL);
 	free(ctx);
 
 	return 0;
@@ -530,13 +530,18 @@ int trsa_encrypt_generate(trsa_ctx ctx,
 		return -1;
 	}
 
-	mpz_t x, y;
+	mpz_t x, y, tmp;
 	buffer_t x_buffer = NULL, buffer = NULL;
 
-	mpz_inits(x, y, NULL);
+	mpz_inits(x, y, tmp, NULL);
 
-	// 1. Generate random x
-	ABORT_IF_ERROR( random_number(x, ctx->n) );
+	// 1. Generate random x with GCD(x, n) == 1
+	do {
+		ABORT_IF_ERROR( random_number(x, ctx->n) );
+
+		// FIXME Insecure?
+		mpz_gcd(tmp, x, ctx->n);
+	} while(mpz_cmp_ui(tmp, 1) != 0);
 
 	// 2. Encrypt (public operation) x to yield y
 	ABORT_IF_ERROR( trsa_op_pub(ctx, x, y) );
@@ -554,11 +559,66 @@ int trsa_encrypt_generate(trsa_ctx ctx,
 	retval = 0;
 
 abort:
-	mpz_clears(x, y, NULL);
+	mpz_clears(x, y, tmp, NULL);
 	buffer_free(x_buffer);
 	buffer_free(buffer);
 
 	FINISH(0);
+}
+
+static int mask_apply(trsa_ctx ctx, mpz_t *r, mpz_t *y)
+{
+	if(!ctx || !r || !y) {
+		return -1;
+	}
+
+	int retval = -1;
+	mpz_t tmp;
+	mpz_init(tmp);
+
+	do {
+		ABORT_IF( random_number(*r, ctx->n) < 0 );
+
+		// FIXME Insecure?
+		mpz_gcd(tmp, *r, ctx->n);
+	} while(mpz_cmp_ui(tmp, 1) != 0);
+
+	mpz_powm_sec(tmp, *r, ctx->e, ctx->n);
+	mpz_mul(*y, *y, tmp);
+	mpz_mod(*y, *y, ctx->n);
+
+	retval = 0;
+
+abort:
+	mpz_clear(tmp);
+	return retval;
+}
+
+static int mask_remove(trsa_ctx ctx, mpz_t *r, mpz_t *x)
+{
+	if(!ctx || !r || !x) {
+		return -1;
+	}
+
+	int retval = -1;
+	mpz_t tmp;
+	mpz_init(tmp);
+
+	// FIXME Insecure?
+	mpz_gcd(tmp, *r, ctx->n);
+	ABORT_IF(mpz_cmp_ui(tmp, 1) != 0);
+
+	// FIXME Insecure?
+	mpz_invert(tmp, *r, ctx->n);
+	mpz_mul(*x, *x, tmp);
+	mpz_mod(*x, *x, ctx->n);
+
+	retval = 0;
+
+abort:
+	mpz_clear(tmp);
+	return retval;
+
 }
 
 int trsa_decrypt_prepare(trsa_ctx ctx,
@@ -587,7 +647,8 @@ int trsa_decrypt_prepare(trsa_ctx ctx,
 		BUFFER_FORMAT_KEMKEY_2(y)
 	));
 
-	// 2. FIXME apply masking
+	// 2. Apply masking
+	ABORT_IF_ERROR( mask_apply(ctx, &ctx->r, &y) );
 
 	// 3. Record parameters in context
 
@@ -696,7 +757,8 @@ int trsa_decrypt_finish(trsa_ctx ctx,
 	// 1. Execute combine operation, yielding x
 	ABORT_IF_ERROR( trsa_op_combine_do(ctx, ctx->y_challenge, x) );
 
-	// 2. FIXME remove masking
+	// 2. Remove masking
+	ABORT_IF_ERROR( mask_remove(ctx, &ctx->r, &x) );
 
 	// 3. dump magic || pubkey || session_key_length into buffer,  x into x_buffer
 	// 4. use buffer as salt and x_buffer as input to KDF, generate session_key output
@@ -936,6 +998,7 @@ static int ctx_clear(trsa_ctx ctx, uint32_t clear)
 	}
 
 	if(clear & CTX_CHALLENGE) {
+		mpz_set_ui(ctx->r, 0);
 		mpz_set_ui(ctx->y_challenge, 0);
 	}
 
