@@ -71,7 +71,7 @@
 struct trsa_context {
 	mpz_t p, q, n, e, d;
 	mpz_t *s, *x_, my_s,  r, y_challenge;
-	uint16_t t, l, my_i;   // FIXME Audit all uses for correctness with uint16_t instead of int
+	uint16_t t, l, my_i;
 
 	uint32_t have;
 	uint32_t state;
@@ -102,6 +102,7 @@ struct trsa_context {
 
 #define ABORT_IF_ERROR( exp ) do { int r = (exp); if(r<0){retval=r; goto abort;} } while(0)
 #define ABORT_IF( exp ) do { if( exp ) { goto abort; } } while(0)
+#define ABORT_IF_INVALID( parts ) ABORT_IF_ERROR( ctx_verify(ctx, parts) )
 
 struct ctx_require_arguments {
 	uint32_t need, clear;
@@ -117,6 +118,7 @@ struct ctx_provide_arguments {
 static int ctx_require(trsa_ctx ctx, struct ctx_require_arguments args);
 static int ctx_provide(trsa_ctx ctx, int retval, struct ctx_provide_arguments args);
 static int ctx_clear(trsa_ctx ctx, uint32_t clear);
+static int ctx_verify(trsa_ctx ctx, uint32_t parts);
 
 trsa_ctx trsa_init ()
 {
@@ -477,6 +479,7 @@ int trsa_share_set(trsa_ctx ctx, const uint8_t *data, size_t data_length) {
 	ABORT_IF_ERROR( buffer_get(buffer,
 		BUFFER_FORMAT_SHARE(ctx, ctx->my_i, ctx->my_s)
 	));
+	ABORT_IF_INVALID( CTX_PUBLIC | CTX_MY_SHARE );
 
 	retval = 0;
 
@@ -646,6 +649,7 @@ int trsa_decrypt_prepare(trsa_ctx ctx,
 		BUFFER_FORMAT_KEMKEY_1(ctx, tmp),
 		BUFFER_FORMAT_KEMKEY_2(y)
 	));
+	ABORT_IF_INVALID( CTX_PUBLIC );
 
 	// 2. Apply masking
 	ABORT_IF_ERROR( mask_apply(ctx, &ctx->r, &y) );
@@ -694,7 +698,7 @@ int trsa_decrypt_partial(trsa_ctx ctx,
 	ABORT_IF_ERROR( trsa_op_partial(ctx, y_challenge, x_partial) );
 
 	// 3. Output response  i || x_partial  FIXME ASCII clear format
-	out = buffer_alloc_put(BUFFER_FORMAT_RESPONSE(ctx->my_i, x_partial)); // FIXME verify range of i (must be <=65535)
+	out = buffer_alloc_put(BUFFER_FORMAT_RESPONSE(ctx->my_i, x_partial));
 	ABORT_IF(!out);
 
 	buffer_give_up(&out, response, response_length);
@@ -807,6 +811,7 @@ int trsa_pubkey_set(trsa_ctx ctx, const uint8_t *data, size_t data_length) {
 	ABORT_IF(!buffer);
 
 	ABORT_IF_ERROR( buffer_get(buffer, BUFFER_FORMAT_PUBKEY(ctx)) );
+	ABORT_IF_INVALID( CTX_PUBLIC );
 
 	retval = 0;
 
@@ -854,12 +859,15 @@ int trsa_op_combine_set(trsa_ctx ctx, unsigned int i, mpz_t in)
 {
 	START(0);
 
+	ABORT_IF(i < 1 || i > ctx->l);
+
 	if(!ctx->x_) {
 		ctx->x_ = calloc(ctx->l, sizeof(*ctx->x_));
 		ABORT_IF(!ctx->x_);
+		for(int j=0; j<ctx->l; j++) {
+			mpz_clear(ctx->x_[j]);
+		}
 	}
-
-	ABORT_IF(i < 1 || i > ctx->l);
 
 	mpz_set(ctx->x_[i-1], in);
 	retval = 0;
@@ -965,10 +973,12 @@ static int ctx_clear(trsa_ctx ctx, uint32_t clear)
 	/* Clearing CTX_CHALLENGE also clears CTX_PARTIALS */
 	if(clear & CTX_CHALLENGE) clear |= CTX_PARTIALS;
 
-
+	uint16_t l_saved = ctx->l;
 	if(clear & CTX_PUBLIC) {
 		mpz_set_ui(ctx->n, 0);
 		mpz_set_ui(ctx->e, 0);
+		ctx->l = 0;
+		ctx->t = 0;
 	}
 
 	if(clear & CTX_PRIVATE) {
@@ -979,7 +989,7 @@ static int ctx_clear(trsa_ctx ctx, uint32_t clear)
 
 	if(clear & CTX_SHARES) {
 		if(ctx->s != NULL) {
-			for(int i=0; i<ctx->l; i++) {
+			for(int i=0; i<l_saved; i++) {
 				mpz_clear(ctx->s[i]);
 			}
 			free(ctx->s);
@@ -989,7 +999,7 @@ static int ctx_clear(trsa_ctx ctx, uint32_t clear)
 
 	if(clear & CTX_PARTIALS) {
 		if(ctx->x_ != NULL) {
-			for(int i=0; i<ctx->l; i++) {
+			for(int i=0; i<l_saved; i++) {
 				mpz_clear(ctx->x_[i]);
 			}
 			free(ctx->x_);
@@ -1053,4 +1063,39 @@ static int ctx_provide(trsa_ctx ctx, int retval, struct ctx_provide_arguments ar
 	}
 
 	return retval;
+}
+
+static int ctx_verify(trsa_ctx ctx, uint32_t parts)
+{
+	if(!ctx) {
+		return -1;
+	}
+
+	if(parts & CTX_PUBLIC) {
+		if(ctx->l < 1 || ctx->t < 1) return -1;
+		if(ctx->t > ctx->l-1) return -1;
+		/* ... */
+	}
+
+	if(parts & CTX_PRIVATE) {
+
+	}
+
+	if(parts & CTX_SHARES) {
+
+	}
+
+	if(parts & CTX_PARTIALS) {
+
+	}
+
+	if(parts & CTX_CHALLENGE) {
+
+	}
+
+	if(parts & CTX_MY_SHARE) {
+		if(ctx->my_i < 1 || ctx->my_i > ctx->l) return -1;
+	}
+
+	return 0;
 }
