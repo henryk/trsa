@@ -77,7 +77,7 @@ struct trsa_context {
 	uint32_t state;
 };
 
-#define CTX_PUBLIC        (1L<<0)
+#define CTX_PUBLIC        (1L<<0)   /* Note: Clearing CTX_PUBLIC implies clearing everything (CTX_ALL) */
 #define CTX_PRIVATE       (1L<<1)
 #define CTX_SHARES        (1L<<2)
 #define CTX_MY_SHARE      (1L<<3)
@@ -465,7 +465,7 @@ abort:
 }
 
 int trsa_share_set(trsa_ctx ctx, const uint8_t *data, size_t data_length) {
-	START(.clear = CTX_ALL | CTX_MY_SHARE);
+	START(.clear = CTX_PUBLIC | CTX_MY_SHARE);
 
 	if(!data || !data_length) {
 		return -1;
@@ -628,7 +628,7 @@ int trsa_decrypt_prepare(trsa_ctx ctx,
 		const uint8_t *encrypted_session_key, size_t encrypted_session_key_length,
 		uint8_t **challenge, size_t *challenge_length) {
 
-	START(.clear = CTX_ALL | CTX_CHALLENGE);
+	START(.clear = CTX_PUBLIC | CTX_CHALLENGE);
 
 	if(!encrypted_session_key || !challenge || !challenge_length) {
 		return -1;
@@ -799,7 +799,7 @@ abort:
 }
 
 int trsa_pubkey_set(trsa_ctx ctx, const uint8_t *data, size_t data_length) {
-	START(.clear = CTX_ALL);
+	START(.clear = CTX_PUBLIC);
 
 	if(!data || !data_length) {
 		return -1;
@@ -969,6 +969,9 @@ static int ctx_clear(trsa_ctx ctx, uint32_t clear)
 	if(!ctx) {
 		return -1;
 	}
+
+	/* Clearing CTX_PUBLIC implies clearing everything */
+	if(clear & CTX_PUBLIC) clear |= CTX_ALL;
 
 	/* Clearing CTX_CHALLENGE also clears CTX_PARTIALS */
 	if(clear & CTX_CHALLENGE) clear |= CTX_PARTIALS;
