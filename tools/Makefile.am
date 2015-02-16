@@ -1,9 +1,10 @@
-bin_PROGRAMS=trsadeal trsaenc trsadec
+bin_PROGRAMS=trsadeal trsaenc trsadec trsapart
 
 # Sources
 trsadeal_SOURCES= trsadeal.c helpers.c
 trsaenc_SOURCES= trsaenc.c helpers.c
 trsadec_SOURCES= trsadec.c helpers.c
+trsapart_SOURCES= trsapart.c helpers.c
 
 # Linker options
 AM_LDFLAGS = $(top_srcdir)/libtrsa/libtrsa.la
