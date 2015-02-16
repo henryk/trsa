@@ -20,4 +20,5 @@ missing
 *.lo
 examples/example
 tools/trsadeal
+tools/trsadec
 tools/trsaenc
