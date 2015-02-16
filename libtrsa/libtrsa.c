@@ -733,9 +733,7 @@ int trsa_decrypt_contribute(trsa_ctx ctx,
 	ABORT_IF_ERROR( buffer_get(buffer, BUFFER_FORMAT_RESPONSE(i, x_partial)) );
 
 	// 2. Set in context
-	ABORT_IF_ERROR( trsa_op_combine_set(ctx, i, x_partial) );
-
-	retval = 0;
+	retval = trsa_op_combine_set(ctx, i, x_partial);
 
 abort:
 	mpz_clear(x_partial);
@@ -858,6 +856,7 @@ int trsa_op_partial(trsa_ctx ctx, mpz_t in, mpz_t out)
 int trsa_op_combine_set(trsa_ctx ctx, unsigned int i, mpz_t in)
 {
 	START(0);
+	uint32_t ok_mask = 0;
 
 	ABORT_IF(i < 1 || i > ctx->l);
 
@@ -865,15 +864,26 @@ int trsa_op_combine_set(trsa_ctx ctx, unsigned int i, mpz_t in)
 		ctx->x_ = calloc(ctx->l, sizeof(*ctx->x_));
 		ABORT_IF(!ctx->x_);
 		for(int j=0; j<ctx->l; j++) {
-			mpz_clear(ctx->x_[j]);
+			mpz_init(ctx->x_[j]);
 		}
 	}
 
 	mpz_set(ctx->x_[i-1], in);
 	retval = 0;
 
+	int count = 0;
+	for(int j=0; j<ctx->l; j++) {
+		if(mpz_cmp_ui(ctx->x_[j], 0) != 0) {
+			count++;
+		}
+	}
+	if(count > ctx->t) {
+		retval = 1;
+		ok_mask = CTX_PARTIALS;
+	}
+
 abort:
-	FINISH(CTX_PARTIALS);
+	FINISH(ok_mask);
 }
 
 static void lambda_S0j(mpz_t out, mpz_t *x_, int l, int j)
