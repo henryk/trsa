@@ -44,5 +44,6 @@ AC_CHECK_HEADERS([openssl/evp.h openssl/rand.h],[],[AC_MSG_ERROR([OpenSSL header
 AC_CONFIG_FILES(Makefile
                 examples/Makefile
                 libtrsa/Makefile
-                include/Makefile)
+                include/Makefile
+                tools/Makefile)
 AC_OUTPUT

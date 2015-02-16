@@ -19,3 +19,4 @@ missing
 *.la
 *.lo
 examples/example
+tools/trsadeal

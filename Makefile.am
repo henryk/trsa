@@ -1,1 +1,1 @@
-SUBDIRS=libtrsa include examples
+SUBDIRS=libtrsa include examples tools
