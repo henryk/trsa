@@ -121,6 +121,7 @@ abort:
 	trsa_fini(decryptor);
 	free(b);
 	free(s);
+	free(c);
 	if(srvsock >= 0) {
 		close(srvsock);
 	}
