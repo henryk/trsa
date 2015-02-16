@@ -7,4 +7,4 @@ trsadeal_SOURCES= trsadeal.c
 trsadeal_LDFLAGS = $(top_srcdir)/libtrsa/libtrsa.la
 
 # Compiler options
-trsadeal_CPPFLAGS = -Wall -pedantic -Werror -Wno-error=format -I$(top_srcdir)/include
+trsadeal_CPPFLAGS = -Wall -pedantic -Werror -I$(top_srcdir)/include

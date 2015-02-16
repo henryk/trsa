@@ -7,7 +7,7 @@
 #include <stdarg.h>
 
 #define USAGE do { fprintf(stderr, "Usage: %s k n bits name\nk -- Number of parts needed to compute\nn -- Number of parts total\nbits -- key size in bits\nname -- basename of output files\n", argv[0]); } while(0)
-#define CHECK_( exp, label ) do { if(!(exp)) { fprintf(stderr, label " failed. Aborting.\n"); goto abort;} } while(0)
+#define CHECK_( exp, label ) do { if(!(exp)) { fputs(label " failed. Aborting.\n", stderr); goto abort;} } while(0)
 #define CHECK_ALLOC(exp) CHECK_( exp, #exp )
 #define CHECK_RETVAL(exp) CHECK_( (exp) >= 0, #exp )
 
