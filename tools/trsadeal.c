@@ -7,7 +7,7 @@
 #include <stdarg.h>
 
 #define USAGE do { fprintf(stderr, "Usage: %s k n bits name\nk -- Number of parts needed to compute\nn -- Number of parts total\nbits -- key size in bits\nname -- basename of output files\n", argv[0]); } while(0)
-#define CHECK_( exp, label ) do { if(!(exp)) { fprintf(stderr, label " failed. Aborting.\n"); } } while(0)
+#define CHECK_( exp, label ) do { if(!(exp)) { fprintf(stderr, label " failed. Aborting.\n"); goto abort;} } while(0)
 #define CHECK_ALLOC(exp) CHECK_( exp, #exp )
 #define CHECK_RETVAL(exp) CHECK_( (exp) >= 0, #exp )
 
@@ -37,6 +37,8 @@ static int write_data(const uint8_t *data, size_t data_length, const char *forma
 		fprintf(stderr, "Couldn't write to %s. Aborting.\n", name);
 		goto abort;
 	}
+
+	retval = 0;
 
 abort:
 	free(name);
@@ -75,6 +77,7 @@ int main(int argc, char **argv) {
 
 	for(int i = 1; i<= n; i++) {
 		CHECK_RETVAL( trsa_share_get(dealer, i, &b, &b_length) );
+		CHECK_RETVAL( write_data(b, b_length, "%s-%i.share", name, i) );
 
 		free(b);
 		b = NULL;
