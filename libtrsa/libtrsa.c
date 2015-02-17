@@ -80,6 +80,7 @@ struct trsa_context {
 		struct part *next;
 		struct part *combine_next;
 	} *part_head;
+	size_t part_count;
 
 	uint32_t have;
 	uint32_t state;
@@ -908,6 +909,7 @@ int trsa_op_combine_set(trsa_ctx ctx, unsigned int i, mpz_t in)
 	tmp->i = i;
 	tmp->next = ctx->part_head;
 	ctx->part_head = tmp;
+	ctx->part_count++;
 	retval = 0;
 
 	int count = parts_unique_count(ctx);
@@ -969,7 +971,8 @@ int parts_permutation_clear_state(struct permutation_state *pstate)
 	return 0;
 }
 
-int parts_permutation_first(struct part *head, int n, struct permutation_state **pstate, struct part **out)
+int parts_permutation_first(struct part *head, int n, size_t part_count,
+		struct permutation_state **pstate, struct part **out)
 {
 	if(!head || !pstate || !out) {
 		return -1;
@@ -979,19 +982,14 @@ int parts_permutation_first(struct part *head, int n, struct permutation_state *
 		*pstate = NULL;
 	}
 
-	size_t count = 0;
 	struct part *h = head;
-	while(h) {
-		count++;
-		h = h->next;
-	}
 
 	// FIXME Overflows galore
 	*pstate = calloc(1, sizeof(**pstate));
 	if(!*pstate) {
 		return -1;
 	}
-	(*pstate)->items = calloc(count, sizeof(*((*pstate)->items)));
+	(*pstate)->items = calloc(part_count, sizeof(*((*pstate)->items)));
 	if(!(*pstate)->items) {
 		free(*pstate);
 		*pstate = NULL;
@@ -999,7 +997,7 @@ int parts_permutation_first(struct part *head, int n, struct permutation_state *
 	}
 
 	struct permutation_state *state = *pstate;
-	state->count = count;
+	state->count = part_count;
 
 	h = head;
 	size_t i = 0;
@@ -1011,7 +1009,7 @@ int parts_permutation_first(struct part *head, int n, struct permutation_state *
 	}
 
 	size_t count_selected = 0;
-	for(i=0; i<count; i++) {
+	for(i=0; i<state->count; i++) {
 		int already_done = 0;
 		for(size_t j=0; j<i; j++) {
 			if(state->items[j].f && state->items[j].i == state->items[i].i) {
@@ -1030,7 +1028,7 @@ int parts_permutation_first(struct part *head, int n, struct permutation_state *
 	}
 
 	struct part *last = NULL;
-	for(i=0; i<count; i++) {
+	for(i=0; i<state->count; i++) {
 		if(state->items[i].f) {
 			state->items[i].p->combine_next = last;
 			last = state->items[i].p;
@@ -1052,7 +1050,7 @@ int trsa_op_combine_do(trsa_ctx ctx, mpz_t in, mpz_t out)
 	mpz_set_ui(w, 1);
 
 	struct part *p = NULL;
-	ABORT_IF_ERROR( parts_permutation_first(ctx->part_head, ctx->t+1, &pstate, &p) );
+	ABORT_IF_ERROR( parts_permutation_first(ctx->part_head, ctx->t+1, ctx->part_count, &pstate, &p) );
 
 	struct part *p_first = p;
 	while(p) {
@@ -1146,6 +1144,7 @@ static int ctx_clear(trsa_ctx ctx, uint32_t clear)
 			free(ctx->part_head);
 			ctx->part_head = tmp;
 		}
+		ctx->part_count = 0;
 	}
 
 	if(clear & CTX_CHALLENGE) {
