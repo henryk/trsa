@@ -71,8 +71,15 @@
 
 struct trsa_context {
 	mpz_t p, q, n, e, d;
-	mpz_t *s, *x_, my_s,  r, y_challenge;
+	mpz_t *s, my_s,  r, y_challenge;
 	uint16_t t, l, my_i;
+
+	struct part {
+		uint16_t i;
+		mpz_t x_;
+		struct part *next;
+		struct part *combine_next;
+	} *part_head;
 
 	uint32_t have;
 	uint32_t state;
@@ -854,67 +861,183 @@ int trsa_op_partial(trsa_ctx ctx, mpz_t in, mpz_t out)
 	return METHOD_FINISH(ctx, 0, 0);
 }
 
+static int parts_unique_count(trsa_ctx ctx)
+{
+	if(!ctx) {
+		return -1;
+	}
+
+	uint8_t *have = calloc(1, (ctx->l+7)/8);
+	if(!have) {
+		return -1;
+	}
+
+	struct part *p = ctx->part_head;
+	while(p) {
+		int bit_index = p->i - 1;
+		int byte_index = bit_index / 8;
+		bit_index = bit_index % 8;
+		have[ byte_index ] |= 1L<<bit_index;
+		p = p->next;
+	}
+
+	int retval = 0;
+	for(int i=0; i<(ctx->l+7)/8; i++) {
+		retval += __builtin_popcount(have[i]);
+	}
+
+	free(have);
+	return retval;
+}
+
 int trsa_op_combine_set(trsa_ctx ctx, unsigned int i, mpz_t in)
 {
 	START(0);
 	uint32_t ok_mask = 0;
+	struct part *tmp = NULL;
 
 	ABORT_IF(i < 1 || i > ctx->l);
 
-	if(!ctx->x_) {
-		ctx->x_ = calloc(ctx->l, sizeof(*ctx->x_));
-		ABORT_IF(!ctx->x_);
-		for(int j=0; j<ctx->l; j++) {
-			mpz_init(ctx->x_[j]);
-		}
-	}
+	tmp = calloc(1, sizeof(*tmp));
+	ABORT_IF(!tmp);
 
-	mpz_set(ctx->x_[i-1], in);
+	mpz_init(tmp->x_);
+
+	mpz_set(tmp->x_, in);
+	tmp->i = i;
+	tmp->next = ctx->part_head;
+	ctx->part_head = tmp;
 	retval = 0;
 
-	int count = 0;
-	for(int j=0; j<ctx->l; j++) {
-		if(mpz_cmp_ui(ctx->x_[j], 0) != 0) {
-			count++;
-		}
-	}
+	int count = parts_unique_count(ctx);
 	if(count > ctx->t) {
 		retval = 1;
 		ok_mask = CTX_PARTIALS;
 	}
 
 abort:
+	if(retval < 0) {
+		if(tmp != NULL) {
+			mpz_clear(tmp->x_);
+		}
+		free(tmp);
+	}
 	FINISH(ok_mask);
 }
 
-static void lambda_S0j(mpz_t out, mpz_t *x_, int l, int j)
+static void lambda_S0j(mpz_t out, struct part *p_head, int l, int j)
 {
 	mpz_fac_ui(out, l);
-	for(int i=1; i<=l; i++) {
-		if(mpz_cmp_ui(x_[i-1], 0) == 0) {
-			continue;
-		}
-		if(i == j) continue;
+
+	for(struct part *p = p_head; p; p = p->combine_next) {
+		if(p->i == j) continue;
 #ifdef DEBUG_PRINTF
-		printf("do %i\n", i);
+		printf("do %i\n", p->i);
 #endif /* DEBUG_PRINTF */
-		mpz_mul_ui(out, out, i);
+		mpz_mul_ui(out, out, p->i);
 	}
-	for(int i=1; i<=l; i++) {
-		if(mpz_cmp_ui(x_[i-1], 0) == 0) {
-			continue;
-		}
-		if(i == j) continue;
-		if(i<j) {
-			mpz_divexact_ui(out, out, j-i);
+	for(struct part *p = p_head; p; p = p->combine_next) {
+		if(p->i == j) continue;
+		if(p->i<j) {
+			mpz_divexact_ui(out, out, j-p->i);
 			mpz_neg(out, out);
 		} else {
-			mpz_divexact_ui(out, out, i-j);
+			mpz_divexact_ui(out, out, p->i-j);
 		}
 	}
 #ifdef DEBUG_PRINTF
 	printf("lambda(%i): ", j); mpz_out_str(stdout, 10, out); printf("\n");
 #endif /* DEBUG_PRINTF */
+}
+
+struct permutation_state {
+	size_t count;
+	struct p_pointer {
+		uint16_t i;
+		unsigned int f:1;
+		struct part *p;
+	} *items;
+};
+
+int parts_permutation_clear_state(struct permutation_state *pstate)
+{
+	if(pstate) {
+		free(pstate->items);
+	}
+	free(pstate);
+	return 0;
+}
+
+int parts_permutation_first(struct part *head, int n, struct permutation_state **pstate, struct part **out)
+{
+	if(!head || !pstate || !out) {
+		return -1;
+	}
+	if(*pstate) {
+		parts_permutation_clear_state(*pstate);
+		*pstate = NULL;
+	}
+
+	size_t count = 0;
+	struct part *h = head;
+	while(h) {
+		count++;
+		h = h->next;
+	}
+
+	// FIXME Overflows galore
+	*pstate = calloc(1, sizeof(**pstate));
+	if(!*pstate) {
+		return -1;
+	}
+	(*pstate)->items = calloc(count, sizeof(*((*pstate)->items)));
+	if(!(*pstate)->items) {
+		free(*pstate);
+		*pstate = NULL;
+		return -1;
+	}
+
+	struct permutation_state *state = *pstate;
+	state->count = count;
+
+	h = head;
+	size_t i = 0;
+	while(h) {
+		state->items[i].i = h->i;
+		state->items[i].p = h;
+		h = h->next;
+		i++;
+	}
+
+	size_t count_selected = 0;
+	for(i=0; i<count; i++) {
+		int already_done = 0;
+		for(size_t j=0; j<i; j++) {
+			if(state->items[j].f && state->items[j].i == state->items[i].i) {
+				already_done = 1;
+				break;
+			}
+		}
+
+		if(!already_done) {
+			state->items[i].f = 1;
+			count_selected++;
+		}
+		if(count_selected >= n) {
+			break;
+		}
+	}
+
+	struct part *last = NULL;
+	for(i=0; i<count; i++) {
+		if(state->items[i].f) {
+			state->items[i].p->combine_next = last;
+			last = state->items[i].p;
+		}
+	}
+
+	*out = last;
+	return 0;
 }
 
 int trsa_op_combine_do(trsa_ctx ctx, mpz_t in, mpz_t out)
@@ -923,27 +1046,30 @@ int trsa_op_combine_do(trsa_ctx ctx, mpz_t in, mpz_t out)
 
 	mpz_t a, b, w, tmp;
 	mpz_inits(a, b, w, tmp, NULL);
+	struct permutation_state *pstate = NULL;
 
 	mpz_set_ui(w, 1);
 
-	for(int j=1; j<=ctx->l; j++) {
-		if(mpz_cmp_ui(ctx->x_[j-1], 0) == 0) {
-			continue;
-		}
+	struct part *p = NULL;
+	ABORT_IF_ERROR( parts_permutation_first(ctx->part_head, ctx->t+1, &pstate, &p) );
 
-		lambda_S0j(tmp, ctx->x_, ctx->l, j);
+	struct part *p_first = p;
+	while(p) {
+		lambda_S0j(tmp, p_first, ctx->l, p->i);
 		mpz_mul_ui(tmp, tmp, 2);
 
 #ifdef DEBUG_PRINTF
-		printf("base: "); mpz_out_str(stdout, 10, ctx->x_[j-1]); printf("\n");
+		printf("base: "); mpz_out_str(stdout, 10, p->x_); printf("\n");
 		printf("exp: "); mpz_out_str(stdout, 10, tmp); printf("\n");
 		printf("mod: "); mpz_out_str(stdout, 10, ctx->n); printf("\n");
 #endif /* DEBUG_PRINTF */
 
 		// TODO Insecure?
-		mpz_powm(tmp, ctx->x_[j-1], tmp, ctx->n);
+		mpz_powm(tmp, p->x_, tmp, ctx->n);
 		mpz_mul(w, w, tmp);
 		mpz_mod(w, w, ctx->n);
+
+		p = p->combine_next;
 	}
 
 	mpz_fac_ui(tmp, ctx->l);
@@ -971,6 +1097,7 @@ int trsa_op_combine_do(trsa_ctx ctx, mpz_t in, mpz_t out)
 
 abort:
 	mpz_clears(a, b, w, tmp, NULL);
+	parts_permutation_clear_state(pstate);
 
 	FINISH(0, .clear = CTX_PARTIALS);
 }
@@ -1012,13 +1139,12 @@ static int ctx_clear(trsa_ctx ctx, uint32_t clear)
 	}
 
 	if(clear & CTX_PARTIALS) {
-		if(ctx->x_ != NULL) {
-			for(int i=0; i<l_saved; i++) {
-				mpz_clear(ctx->x_[i]);
-			}
-			free(ctx->x_);
+		while(ctx->part_head != NULL) {
+			mpz_clear(ctx->part_head->x_);
+			struct part *tmp = ctx->part_head->next;
+			free(ctx->part_head);
+			ctx->part_head = tmp;
 		}
-		ctx->x_ = NULL;
 	}
 
 	if(clear & CTX_CHALLENGE) {
