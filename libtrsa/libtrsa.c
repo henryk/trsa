@@ -60,12 +60,13 @@
 
 /* Challenge serialization: challenge */
 #define BUFFER_FORMAT_CHALLENGE(challenge) \
-	BUFFER_FORMAT_MPZ(challenge)
+	BUFFER_FORMAT_MPZ_ASCII(challenge)
 
-/* Response serialization: i, x_partial */
+/* Response serialization: i : x_partial */
 #define BUFFER_FORMAT_RESPONSE(i, x_partial) \
-	BUFFER_FORMAT_UINT16(i), \
-	BUFFER_FORMAT_MPZ(x_partial)
+	BUFFER_FORMAT_UINT16_ASCII(i), \
+	BUFFER_FORMAT_FIXED_BYTES((const uint8_t*)":", 1), \
+	BUFFER_FORMAT_MPZ_ASCII(x_partial)
 
 
 struct trsa_context {
@@ -658,7 +659,7 @@ int trsa_decrypt_prepare(trsa_ctx ctx,
 
 	mpz_set(ctx->y_challenge, y);
 
-	// 4. Generate and output challenge   FIXME ASCII clear format
+	// 4. Generate and output challenge
 	output = buffer_alloc_put(BUFFER_FORMAT_CHALLENGE(ctx->y_challenge));
 	ABORT_IF(!output);
 
@@ -691,13 +692,13 @@ int trsa_decrypt_partial(trsa_ctx ctx,
 	in = buffer_init(challenge, challenge_length);
 	ABORT_IF(!in);
 
-	// 1. Read challenge   FIXME ASCII clear format
+	// 1. Read challenge
 	ABORT_IF_ERROR( buffer_get(in, BUFFER_FORMAT_CHALLENGE(y_challenge)) );
 
 	// 2. Perform partial computation
 	ABORT_IF_ERROR( trsa_op_partial(ctx, y_challenge, x_partial) );
 
-	// 3. Output response  i || x_partial  FIXME ASCII clear format
+	// 3. Output response  i || x_partial
 	out = buffer_alloc_put(BUFFER_FORMAT_RESPONSE(ctx->my_i, x_partial));
 	ABORT_IF(!out);
 
@@ -729,7 +730,7 @@ int trsa_decrypt_contribute(trsa_ctx ctx,
 	buffer = buffer_init(response, response_length);
 	ABORT_IF(!buffer);
 
-	// 1. Read response i || x_partial   FIXME ASCII clear format
+	// 1. Read response i || x_partial
 	ABORT_IF_ERROR( buffer_get(buffer, BUFFER_FORMAT_RESPONSE(i, x_partial)) );
 
 	// 2. Set in context
