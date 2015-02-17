@@ -72,7 +72,7 @@
 struct trsa_context {
 	mpz_t p, q, n, e, d;
 	mpz_t *s, my_s,  r, y_challenge;
-	uint16_t t, l, my_i;
+	uint16_t t, l, my_i,  decrypt_length;
 
 	struct part {
 		uint16_t i;
@@ -650,11 +650,10 @@ int trsa_decrypt_prepare(trsa_ctx ctx,
 	buffer = buffer_init(encrypted_session_key, encrypted_session_key_length);
 	ABORT_IF(!buffer);
 
-	// 1. Verify and read encrypted_session_key, yielding pubkey, y and session_key_length (ignored)
-	uint16_t tmp; /* Session key length read into here and ignored */
+	// 1. Verify and read encrypted_session_key, yielding pubkey, y and session_key_length
 
 	ABORT_IF_ERROR( buffer_get(buffer,
-		BUFFER_FORMAT_KEMKEY_1(ctx, tmp),
+		BUFFER_FORMAT_KEMKEY_1(ctx, ctx->decrypt_length),
 		BUFFER_FORMAT_KEMKEY_2(y)
 	));
 	ABORT_IF_INVALID( CTX_PUBLIC );
@@ -763,6 +762,8 @@ int trsa_decrypt_finish(trsa_ctx ctx,
 	buffer_t x_buffer = NULL, buffer = NULL;
 
 	mpz_init(x);
+
+	ABORT_IF( ctx->decrypt_length != session_key_length );
 
 	// 1. Execute combine operation, yielding x
 	ABORT_IF_ERROR( trsa_op_combine_do(ctx, ctx->y_challenge, x) );
