@@ -11,6 +11,8 @@
 
 #include "buffer.h"
 
+#define ASCII_BASE 62
+
 static int ensure_space(struct buffer *b, size_t length)
 {
 	if(!b) {
@@ -38,10 +40,10 @@ static int ensure_space(struct buffer *b, size_t length)
 	return 0;
 }
 
-static size_t estimate_size_uint16_base10(uint16_t x)
+static size_t estimate_size_uint16(uint16_t x)
 {
 	size_t s = 1;
-	for(int m=10; m<UINT16_MAX; m*=10) {
+	for(int m=ASCII_BASE; m<UINT16_MAX; m*=ASCII_BASE) {
 		if(x >= m) {
 			s+=1;
 		}
@@ -72,7 +74,7 @@ static size_t estimate_size(const struct buffer_description *data)
 			break;
 		case BUFFER_DESCRIPTION_TYPE_UINT16_ASCII:
 			if(data->data.uint16) {
-				s+=estimate_size_uint16_base10(*data->data.uint16);
+				s+=estimate_size_uint16(*data->data.uint16);
 			}
 			break;
 		case BUFFER_DESCRIPTION_TYPE_MPZ:
@@ -83,7 +85,7 @@ static size_t estimate_size(const struct buffer_description *data)
 			break;
 		case BUFFER_DESCRIPTION_TYPE_MPZ_ASCII:
 			if(data->data.mpz) {
-				s += mpz_sizeinbase (*(data->data.mpz), 10);
+				s += mpz_sizeinbase (*(data->data.mpz), ASCII_BASE);
 			}
 			break;
 		}
@@ -111,9 +113,37 @@ int buffer_put_uint16(buffer_t b, uint16_t data)
 	return 0;
 }
 
+static int to_ascii(unsigned int x)
+{
+	if(x < 10) {
+		return '0' + x;
+	}
+	if(x < 36) {
+		return 'A' + x - 10;
+	}
+	if(x < 62) {
+		return 'a' + x - 10 - 26;
+	}
+	return -1;
+}
+
+static int from_ascii(unsigned char c)
+{
+	if(c >= '0' && c <= '9') {
+		return c - '0';
+	}
+	if(c >= 'A' && c <= 'Z') {
+		return c - 'A' + 10;
+	}
+	if(c >= 'a' && c <= 'z') {
+		return c - 'a' + 10 + 26;
+	}
+	return -1;
+}
+
 int buffer_put_uint16_ascii(buffer_t b, uint16_t data)
 {
-	size_t size_estimate = estimate_size_uint16_base10(data);
+	size_t size_estimate = estimate_size_uint16(data);
 	int r = ensure_space(b, size_estimate);
 	if(r < 0) {
 		return r;
@@ -126,8 +156,12 @@ int buffer_put_uint16_ascii(buffer_t b, uint16_t data)
 	int pos = size_estimate;
 	do {
 		pos--;
-		b->d[b->p + pos] = '0' + (data % 10);
-		data /= 10;
+		int encoded = to_ascii(data % ASCII_BASE);
+		if(encoded < 0) {
+			return -1;
+		}
+		b->d[b->p + pos] = encoded;
+		data /= ASCII_BASE;
 	} while(data > 0);
 
 	b->p += size_estimate;
@@ -194,7 +228,7 @@ abort:
 int buffer_put_mpz_ascii(buffer_t b, mpz_t data)
 {
 	int retval = -1;
-	size_t size_estimate = mpz_sizeinbase (data, 10);
+	size_t size_estimate = mpz_sizeinbase (data, ASCII_BASE);
 	if(mpz_sgn(data) < 0) {
 		size_estimate += 1;
 	}
@@ -226,8 +260,14 @@ int buffer_put_mpz_ascii(buffer_t b, mpz_t data)
 			goto abort;
 		}
 		pos--;
-		b->d[b->p + pos] = '0' + (mpz_fdiv_ui(tmp, 10));
-		mpz_fdiv_q_ui(tmp, tmp, 10);
+
+		int encoded = to_ascii( mpz_fdiv_ui(tmp, ASCII_BASE) );
+		if(encoded < 0) {
+			goto abort;
+		}
+
+		b->d[b->p + pos] = encoded;
+		mpz_fdiv_q_ui(tmp, tmp, ASCII_BASE);
 	} while(mpz_cmp_ui(tmp, 0) != 0);
 
 	b->p += size_estimate;
@@ -267,9 +307,10 @@ int buffer_get_uint16_ascii(buffer_t b, uint16_t *data)
 	uint32_t tmp = 0;
 
 	while(ensure_space(b, length+1) >= 0) {
-		if(b->d[b->p + length] >= '0' && b->d[b->p + length] <= '9') {
-			tmp *= 10;
-			tmp += b->d[b->p + length] - '0';
+		int decoded = from_ascii(b->d[b->p + length]);
+		if(decoded >= 0) {
+			tmp *= ASCII_BASE;
+			tmp += decoded;
 			length++;
 		} else {
 			break;
@@ -345,12 +386,15 @@ int buffer_get_mpz_ascii(buffer_t b, mpz_t data)
 		if(length == 0 && b->d[b->p + length] == '-') {
 			is_neg = 1;
 			length++;
-		} else if(b->d[b->p + length] >= '0' && b->d[b->p + length] <= '9') {
-			mpz_mul_ui(tmp, tmp, 10);
-			mpz_add_ui(tmp, tmp, b->d[b->p + length] - '0');
-			length++;
 		} else {
-			break;
+			int decoded = from_ascii(b->d[b->p + length]);
+			if(decoded >= 0) {
+				mpz_mul_ui(tmp, tmp, ASCII_BASE);
+				mpz_add_ui(tmp, tmp, decoded);
+				length++;
+			} else {
+				break;
+			}
 		}
 	}
 
