@@ -129,6 +129,13 @@ static int ctx_provide(trsa_ctx ctx, int retval, struct ctx_provide_arguments ar
 static int ctx_clear(trsa_ctx ctx, uint32_t clear);
 static int ctx_verify(trsa_ctx ctx, uint32_t parts);
 
+#define BITMAP_SIZE(n) ( (n+7)/8 )
+#define BITMAP_BYTE_INDEX(i) ((i)/8)
+#define BITMAP_BIT_INDEX(i) ((i)%8)
+#define BITMAP_SET(x, i) x[ BITMAP_BYTE_INDEX(i) ] |= 1L<<BITMAP_BIT_INDEX(i)
+#define BITMAP_CLEAR(x, i) x[ BITMAP_BYTE_INDEX(i) ] &= ~(1L<<BITMAP_BIT_INDEX(i))
+#define BITMAP_ISSET(x, i) (x[ BITMAP_BYTE_INDEX(i) ] & 1L<<BITMAP_BIT_INDEX(i))
+
 trsa_ctx trsa_init ()
 {
 	struct trsa_context *ctx = calloc(1, sizeof(*ctx));
@@ -869,22 +876,19 @@ static int parts_unique_count(trsa_ctx ctx)
 		return -1;
 	}
 
-	uint8_t *have = calloc(1, (ctx->l+7)/8);
+	uint8_t *have = calloc(1, BITMAP_SIZE(ctx->l));
 	if(!have) {
 		return -1;
 	}
 
 	struct part *p = ctx->part_head;
 	while(p) {
-		int bit_index = p->i - 1;
-		int byte_index = bit_index / 8;
-		bit_index = bit_index % 8;
-		have[ byte_index ] |= 1L<<bit_index;
+		BITMAP_SET(have, p->i-1);
 		p = p->next;
 	}
 
 	int retval = 0;
-	for(int i=0; i<(ctx->l+7)/8; i++) {
+	for(int i=0; i<BITMAP_SIZE(ctx->l); i++) {
 		retval += __builtin_popcount(have[i]);
 	}
 
@@ -954,20 +958,113 @@ static void lambda_S0j(mpz_t out, struct part *p_head, int l, int j)
 }
 
 struct permutation_state {
-	size_t count;
+	size_t count, pos, last;
+	unsigned int last_set:1;
+	int count_selected, n, count_unique;
 	struct p_pointer {
-		uint16_t i;
-		unsigned int f:1;
 		struct part *p;
+		size_t prev;
+		unsigned int prev_set:1;
 	} *items;
+	uint8_t *bitmap;
 };
 
 int parts_permutation_clear_state(struct permutation_state *pstate)
 {
 	if(pstate) {
 		free(pstate->items);
+		free(pstate->bitmap);
 	}
 	free(pstate);
+	return 0;
+}
+
+static void append_item(struct permutation_state *state, size_t pos)
+{
+#ifdef DEBUG_PRINTF
+	printf("append %i (%zi)\n", state->items[pos].p->i, pos);
+#endif
+	if(BITMAP_ISSET(state->bitmap, state->items[pos].p->i)) {
+		return;
+	}
+	state->items[pos].prev = state->last;
+	state->items[pos].prev_set = state->last_set;
+	state->last = pos;
+	state->last_set = 1;
+	if(!BITMAP_ISSET(state->bitmap, state->items[pos].p->i)) {
+		state->count_unique++;
+	}
+	BITMAP_SET(state->bitmap, state->items[pos].p->i);
+	state->count_selected++;
+}
+
+static void remove_item(struct permutation_state *state)
+{
+	if(!state->last_set) {
+		return;
+	}
+	size_t pos = state->last;
+#ifdef DEBUG_PRINTF
+	printf("remove %i (%zi)\n", state->items[pos].p->i, pos);
+#endif
+	state->last = state->items[pos].prev;
+	state->last_set = state->items[pos].prev_set;
+	if(BITMAP_ISSET(state->bitmap, state->items[pos].p->i)) {
+		state->count_unique--;
+	}
+	BITMAP_CLEAR(state->bitmap, state->items[pos].p->i);
+	state->count_selected--;
+}
+
+int parts_permutation_next(struct permutation_state *state, struct part **out)
+{
+	if(!state || !out) {
+		return -1;
+	}
+
+	int accept = 0;
+	while(!accept) {
+		for(; state->pos < state->count; state->pos++) {
+			if(state->count_selected >= state->n) {
+				break;
+			}
+
+			append_item(state, state->pos);
+
+#ifdef DEBUG_PRINTF
+			{
+				printf("permutation now:");
+				size_t tmp = state->last;
+				int tmp_set = state->last_set;
+				while(tmp_set) {
+					printf(" %i", state->items[tmp].p->i);
+					tmp_set = state->items[tmp].prev_set;
+					tmp = state->items[tmp].prev;
+				};
+				printf("\n");
+			}
+#endif
+		}
+		accept = state->count_unique == state->n;
+		if(!accept) {
+			/* Remove last item and retry by appending one further down. If last item
+			 * in origin list was tried: try second to last. */
+			remove_item(state);
+		}
+	}
+
+	{
+		*out = NULL;
+		size_t tmp = state->last;
+		int tmp_set = state->last_set;
+		while(tmp_set) {
+			state->items[tmp].p->combine_next = *out;
+			*out = state->items[tmp].p;
+			tmp_set = state->items[tmp].prev_set;
+			tmp = state->items[tmp].prev;
+		}
+	}
+
 	return 0;
 }
 
@@ -995,48 +1092,27 @@ int parts_permutation_first(struct part *head, int n, size_t part_count,
 		*pstate = NULL;
 		return -1;
 	}
+	(*pstate)->bitmap = calloc( 1, BITMAP_SIZE(part_count) );
+	if(!(*pstate)->bitmap) {
+		free((*pstate)->items);
+		free(*pstate);
+		*pstate = NULL;
+		return -1;
+	}
 
 	struct permutation_state *state = *pstate;
 	state->count = part_count;
+	state->n = n;
 
 	h = head;
 	size_t i = 0;
 	while(h) {
-		state->items[i].i = h->i;
 		state->items[i].p = h;
 		h = h->next;
 		i++;
 	}
 
-	size_t count_selected = 0;
-	for(i=0; i<state->count; i++) {
-		int already_done = 0;
-		for(size_t j=0; j<i; j++) {
-			if(state->items[j].f && state->items[j].i == state->items[i].i) {
-				already_done = 1;
-				break;
-			}
-		}
-
-		if(!already_done) {
-			state->items[i].f = 1;
-			count_selected++;
-		}
-		if(count_selected >= n) {
-			break;
-		}
-	}
-
-	struct part *last = NULL;
-	for(i=0; i<state->count; i++) {
-		if(state->items[i].f) {
-			state->items[i].p->combine_next = last;
-			last = state->items[i].p;
-		}
-	}
-
-	*out = last;
-	return 0;
+	return parts_permutation_next(state, out);
 }
 
 int trsa_op_combine_do(trsa_ctx ctx, mpz_t in, mpz_t out)
