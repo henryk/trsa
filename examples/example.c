@@ -82,9 +82,9 @@ static int contribute_partial(trsa_ctx source, trsa_ctx destination,
 int main(void) {
 	int retval = -1;
 	trsa_ctx dealer, encryptor, decryptor, participant_1, participant_3,
-			participant_4;
+			participant_4, participant_5;
 	trsa_ctx *contexts[] = {&dealer, &encryptor, &decryptor, &participant_1,
-			&participant_3, &participant_4, NULL};
+			&participant_3, &participant_4, &participant_5, NULL};
 	trsa_ctx **ctx_ptr = contexts;
 	uint8_t session_key[20];
 	uint8_t *encrypted_session_key = NULL;
@@ -93,8 +93,8 @@ int main(void) {
 	uint8_t *challenge = NULL;
 	size_t challenge_length = 0;
 
-	mpz_t x, x_[3], y, y_; 	// FIXME test code
-	mpz_inits(x, x_[0], x_[1], x_[2], y, y_, NULL);
+	mpz_t x, x_[4], y, y_; 	// FIXME test code
+	mpz_inits(x, x_[0], x_[1], x_[2], x_[3], y, y_, NULL);
 
 
 	while(*ctx_ptr) {
@@ -113,6 +113,8 @@ int main(void) {
 		FAIL("copy_share(...,3) failed");
 	if(copy_share(dealer, participant_4, 4) < 0)
 		FAIL("copy_share(...,4) failed");
+	if(copy_share(dealer, participant_5, 5) < 0)
+		FAIL("copy_share(...,5) failed");
 
 	if(copy_pubkey(dealer, encryptor) < 0)
 		FAIL("copy_pubkey() failed");
@@ -135,6 +137,9 @@ int main(void) {
 	if(trsa_op_partial(participant_4, x, x_[2]) < 0)
 		FAIL("trsa_op_partial(4, ...) failed");
 
+	if(trsa_op_partial(participant_5, x, x_[3]) < 0)
+		FAIL("trsa_op_partial(5, ...) failed");
+
 	if(trsa_op_combine_set(decryptor, 1, x_[0]) < 0)
 		FAIL("trsa_op_combine_set(1, ...) failed");
 
@@ -143,6 +148,9 @@ int main(void) {
 
 	if(trsa_op_combine_set(decryptor, 4, x_[2]) < 0)
 		FAIL("trsa_op_combine_set(4, ...) failed");
+
+	if(trsa_op_combine_set(decryptor, 5, x_[3]) < 0)
+		FAIL("trsa_op_combine_set(5, ...) failed");
 
 	if(trsa_op_combine_do(decryptor, x, y_) < 0)  // y_: Decrypted
 		FAIL("trsa_op_combine_do() failed");
@@ -163,12 +171,21 @@ int main(void) {
 	if(contribute_partial(participant_1, decryptor, challenge, challenge_length)
 			< 0)
 		FAIL("contribute_partial(...,1) failed");
+	if(contribute_partial(participant_1, decryptor, challenge, challenge_length)
+			< 0)
+		FAIL("contribute_partial(...,1) second time failed");
 	if(contribute_partial(participant_3, decryptor, challenge, challenge_length)
 			< 0)
 		FAIL("contribute_partial(...,3) failed");
 	if(contribute_partial(participant_4, decryptor, challenge, challenge_length)
 			< 0)
 		FAIL("contribute_partial(...,4) failed");
+	if(contribute_partial(participant_4, decryptor, challenge, challenge_length)
+			< 0)
+		FAIL("contribute_partial(...,4) second time failed");
+	if(contribute_partial(participant_5, decryptor, challenge, challenge_length)
+			< 0)
+		FAIL("contribute_partial(...,5) failed");
 
 	if(trsa_decrypt_finish(decryptor, restored_session_key, sizeof(restored_session_key)) < 0)
 		FAIL("trsa_decrypt_finish() failed");
@@ -186,6 +203,6 @@ int main(void) {
 	}
 	free(encrypted_session_key);
 	free(challenge);
-	mpz_clears(x, x_[0], x_[1], x_[2], y, y_, NULL); // FIXME Test code
+	mpz_clears(x, x_[0], x_[1], x_[2], x_[3], y, y_, NULL); // FIXME Test code
 	return retval;
 }
