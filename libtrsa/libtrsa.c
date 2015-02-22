@@ -283,15 +283,15 @@ static int random_number(mpz_t out, mpz_t m)
 	mpz_mul(t, t, m);
 
 #ifdef DEBUG_PRINTF
-	printf("m: "); mpz_out_str(stdout, 10, m); printf("\n");
-	printf("u: %zi\n", u);
-	printf("t: "); mpz_out_str(stdout, 10, t); printf("\n");
+	printf("R m: "); mpz_out_str(stdout, 10, m); printf("\n");
+	printf("R u: %zi\n", u);
+	printf("R t: "); mpz_out_str(stdout, 10, t); printf("\n");
 #endif /* DEBUG_PRINTF */
 
 	do {
 		ABORT_IF( random_bits(out, u) < 0 );
 #ifdef DEBUG_PRINTF
-		printf("x: "); mpz_out_str(stdout, 10, out); printf("\n");
+		printf("R x: "); mpz_out_str(stdout, 10, out); printf("\n");
 #endif /* DEBUG_PRINTF */
 	} while(mpz_cmp(out, t) >= 0);
 
@@ -299,7 +299,7 @@ static int random_number(mpz_t out, mpz_t m)
 	retval = 0;
 
 #ifdef DEBUG_PRINTF
-	printf("r: "); mpz_out_str(stdout, 10, out); printf("\n");
+	printf("R r: "); mpz_out_str(stdout, 10, out); printf("\n");
 #endif /* DEBUG_PRINTF */
 
 abort:
@@ -425,17 +425,17 @@ int trsa_key_generate(trsa_ctx ctx, unsigned int numbits, unsigned int t, unsign
 	// FIXME Generate verification values
 
 #ifdef DEBUG_PRINTF
-	printf("q: "); mpz_out_str(stdout, 10, ctx->q); printf("\n");
-	printf("p: "); mpz_out_str(stdout, 10, ctx->p); printf("\n");
-	printf("n: "); mpz_out_str(stdout, 10, ctx->n); printf("\n");
-	printf("phi_n: "); mpz_out_str(stdout, 10, phi_n); printf("\n");
-	printf("e: "); mpz_out_str(stdout, 10, ctx->e); printf("\n");
-	printf("d: "); mpz_out_str(stdout, 10, ctx->d); printf("\n");
+	printf("G q: "); mpz_out_str(stdout, 10, ctx->q); printf("\n");
+	printf("G p: "); mpz_out_str(stdout, 10, ctx->p); printf("\n");
+	printf("G n: "); mpz_out_str(stdout, 10, ctx->n); printf("\n");
+	printf("G phi_n: "); mpz_out_str(stdout, 10, phi_n); printf("\n");
+	printf("G e: "); mpz_out_str(stdout, 10, ctx->e); printf("\n");
+	printf("G d: "); mpz_out_str(stdout, 10, ctx->d); printf("\n");
 	for(int i=0; i<=t; i++) {
-		printf("c_%i: ", i); mpz_out_str(stdout, 10, c[i]); printf("\n");
+		printf("G c_%i: ", i); mpz_out_str(stdout, 10, c[i]); printf("\n");
 	}
 	for(int i=1; i<=l; i++) {
-		printf("s_%i: ", i); mpz_out_str(stdout, 10, ctx->s[i-1]); printf("\n");
+		printf("G s_%i: ", i); mpz_out_str(stdout, 10, ctx->s[i-1]); printf("\n");
 	}
 #endif /* DEBUG_PRINTF */
 
@@ -982,7 +982,7 @@ int parts_permutation_clear_state(struct permutation_state *pstate)
 static void append_item(struct permutation_state *state, size_t pos)
 {
 #ifdef DEBUG_PRINTF
-	printf("append %i (%zi)\n", state->items[pos].p->i, pos);
+	printf("P append %i (%zi)\n", state->items[pos].p->i, pos);
 #endif
 	if(BITMAP_ISSET(state->bitmap, state->items[pos].p->i)) {
 		return;
@@ -1005,7 +1005,7 @@ static void remove_item(struct permutation_state *state)
 	}
 	size_t pos = state->last;
 #ifdef DEBUG_PRINTF
-	printf("remove %i (%zi)\n", state->items[pos].p->i, pos);
+	printf("P remove %i (%zi)\n", state->items[pos].p->i, pos);
 #endif
 	state->last = state->items[pos].prev;
 	state->last_set = state->items[pos].prev_set;
@@ -1033,7 +1033,7 @@ int parts_permutation_next(struct permutation_state *state, struct part **out)
 
 #ifdef DEBUG_PRINTF
 			{
-				printf("permutation now:");
+				printf("P permutation now:");
 				size_t tmp = state->last;
 				int tmp_set = state->last_set;
 				while(tmp_set) {
@@ -1134,9 +1134,9 @@ int trsa_op_combine_do(trsa_ctx ctx, mpz_t in, mpz_t out)
 		mpz_mul_ui(tmp, tmp, 2);
 
 #ifdef DEBUG_PRINTF
-		printf("base: "); mpz_out_str(stdout, 10, p->x_); printf("\n");
-		printf("exp: "); mpz_out_str(stdout, 10, tmp); printf("\n");
-		printf("mod: "); mpz_out_str(stdout, 10, ctx->n); printf("\n");
+		printf("C base: "); mpz_out_str(stdout, 10, p->x_); printf("\n");
+		printf("C exp: "); mpz_out_str(stdout, 10, tmp); printf("\n");
+		printf("C mod: "); mpz_out_str(stdout, 10, ctx->n); printf("\n");
 #endif /* DEBUG_PRINTF */
 
 		// TODO Insecure?
@@ -1162,10 +1162,10 @@ int trsa_op_combine_do(trsa_ctx ctx, mpz_t in, mpz_t out)
 	mpz_mod(out, out, ctx->n);
 
 #ifdef DEBUG_PRINTF
-	printf("a: "); mpz_out_str(stdout, 10, a); printf("\n");
-	printf("b: "); mpz_out_str(stdout, 10, b); printf("\n");
-	printf("w: "); mpz_out_str(stdout, 10, w); printf("\n");
-	printf("out: "); mpz_out_str(stdout, 10, out); printf("\n");
+	printf("C a: "); mpz_out_str(stdout, 10, a); printf("\n");
+	printf("C b: "); mpz_out_str(stdout, 10, b); printf("\n");
+	printf("C w: "); mpz_out_str(stdout, 10, w); printf("\n");
+	printf("C out: "); mpz_out_str(stdout, 10, out); printf("\n");
 #endif /* DEBUG_PRINTF */
 
 	retval = 0;
