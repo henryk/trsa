@@ -158,6 +158,7 @@ int main(void) {
 	if(mpz_cmp(y, y_) != 0)
 		FAIL("y != y'");
 
+	printf("Success!\n");
 
 	if(trsa_encrypt_generate(encryptor, session_key, sizeof(session_key),
 			&encrypted_session_key, &encrypted_session_key_length) < 0)

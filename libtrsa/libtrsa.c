@@ -666,6 +666,10 @@ int trsa_decrypt_prepare(trsa_ctx ctx,
 	));
 	ABORT_IF_INVALID( CTX_PUBLIC );
 
+#ifdef DEBUG_PRINTF
+	printf("D y: "); mpz_out_str(stdout, 10, y); printf("\n");
+#endif /* DEBUG_PRINTF */
+
 	// 2. Apply masking
 	ABORT_IF_ERROR( mask_apply(ctx, &ctx->r, &y) );
 
@@ -680,6 +684,10 @@ int trsa_decrypt_prepare(trsa_ctx ctx,
 	buffer_give_up(&output, challenge, challenge_length);
 	retval = 0;
 
+#ifdef DEBUG_PRINTF
+	printf("D r: "); mpz_out_str(stdout, 10, ctx->r); printf("\n");
+	printf("D y_challenge: "); mpz_out_str(stdout, 10, ctx->y_challenge); printf("\n");
+#endif /* DEBUG_PRINTF */
 
 abort:
 	mpz_clear(y);
@@ -866,6 +874,11 @@ int trsa_op_partial(trsa_ctx ctx, mpz_t in, mpz_t out)
 	mpz_powm_sec(out, out, ctx->my_s, ctx->n);
 
 	mpz_clear(exponent);
+
+#ifdef DEBUG_PRINTF
+	printf("part %i in: ", ctx->my_i); mpz_out_str(stdout, 10, in); printf("\n");
+	printf("part %i out: ", ctx->my_i); mpz_out_str(stdout, 10, out); printf("\n");
+#endif /* DEBUG_PRINTF */
 
 	return METHOD_FINISH(ctx, 0, 0);
 }
