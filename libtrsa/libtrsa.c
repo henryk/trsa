@@ -237,7 +237,15 @@ static int random_bits(mpz_t out, size_t b)
 	buffer = malloc(full_byte_count);
 	ABORT_IF(!buffer);
 
+#ifdef DEBUG_MAKE_RNG_DETERMINISTIC
+	static volatile uint32_t state = 0;
+	for(size_t i=0; i<full_byte_count; i++) {
+		buffer[i] = (state>>16) & 0xff;
+		state = state * 1103515245L + 12345;
+	}
+#else
 	ABORT_IF( RAND_bytes(buffer, full_byte_count) != 1 );
+#endif
 
 	buffer[full_byte_count-1] &= final_mask;
 
@@ -247,7 +255,7 @@ static int random_bits(mpz_t out, size_t b)
 
 abort:
 	if(buffer) {
-		OPENSSL_cleanse(buffer, sizeof(buffer));
+		OPENSSL_cleanse(buffer, full_byte_count);
 		free(buffer);
 	}
 
