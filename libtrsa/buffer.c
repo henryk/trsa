@@ -228,9 +228,11 @@ abort:
 int buffer_put_mpz_ascii(buffer_t b, mpz_t data)
 {
 	int retval = -1;
+	int size_minus = 0;
 	size_t size_estimate = mpz_sizeinbase (data, ASCII_BASE);
 	if(mpz_sgn(data) < 0) {
 		size_estimate += 1;
+		size_minus = 1;
 	}
 	mpz_t tmp;
 
@@ -248,7 +250,7 @@ int buffer_put_mpz_ascii(buffer_t b, mpz_t data)
 
 	mpz_set(tmp, data);
 
-	if(mpz_sgn(tmp) < 0) {
+	if(size_minus) {
 		b->d[b->p] = '-';
 		mpz_neg(tmp, tmp);
 	}
@@ -269,6 +271,18 @@ int buffer_put_mpz_ascii(buffer_t b, mpz_t data)
 		b->d[b->p + pos] = encoded;
 		mpz_fdiv_q_ui(tmp, tmp, ASCII_BASE);
 	} while(mpz_cmp_ui(tmp, 0) != 0);
+
+	/*
+	 * mpz_sizeinbase() may overestimate the required size. Since we started filling
+	 * in the buffer from the end (to get a big-endian output), the additional space
+	 * will be at the beginning of the buffer. In this case, memmove() the data to the
+	 * correct start of the buffer. (Note: if the number was negative, a '-' sign was
+	 * inserted at the beginning, this needs to be kept track of.)
+	 */
+	if(pos - size_minus > 0) {
+		memmove(b->d + b->p + size_minus, b->d + b->p + pos, size_estimate - pos - size_minus);
+		size_estimate = size_estimate - pos - size_minus;
+	}
 
 	b->p += size_estimate;
 
@@ -425,6 +439,7 @@ buffer_t buffer_alloc(size_t size_estimate)
 			free(b);
 			return NULL;
 		}
+		b->l = size_estimate;
 	}
 
 	b->may_modify = 1;
