@@ -1113,7 +1113,6 @@ int parts_permutation_first(struct part *head, int n, size_t part_count,
 
 	struct part *h = head;
 
-	// FIXME Overflows galore
 	*pstate = calloc(1, sizeof(**pstate));
 	if(!*pstate) {
 		return -1;
@@ -1151,59 +1150,87 @@ int trsa_op_combine_do(trsa_ctx ctx, mpz_t in, mpz_t out)
 {
 	START(.need = CTX_PUBLIC | CTX_PARTIALS);
 
-	mpz_t a, b, w, tmp;
-	mpz_inits(a, b, w, tmp, NULL);
+	mpz_t a, b, w, tmp, in_;
+	mpz_inits(a, b, w, tmp, in_, NULL);
 	struct permutation_state *pstate = NULL;
 
-	mpz_set_ui(w, 1);
+	/*
+	 * Will try all possible (== t+1 distinct i values) subsets of the input partials.
+	 * Check whether the result is correct by checking for trsa_op_pub(out) == in.
+	 */
 
 	struct part *p = NULL;
 	ABORT_IF_ERROR( parts_permutation_first(ctx->part_head, ctx->t+1, ctx->part_count, &pstate, &p) );
 
-	struct part *p_first = p;
-	while(p) {
-		lambda_S0j(tmp, p_first, ctx->l, p->i);
-		mpz_mul_ui(tmp, tmp, 2);
+	do {
 
-#ifdef DEBUG_PRINTF
-		printf("C base: "); mpz_out_str(stdout, 10, p->x_); printf("\n");
-		printf("C exp: "); mpz_out_str(stdout, 10, tmp); printf("\n");
-		printf("C mod: "); mpz_out_str(stdout, 10, ctx->n); printf("\n");
-#endif /* DEBUG_PRINTF */
+		mpz_set_ui(a, 0);
+		mpz_set_ui(b, 0);
+		mpz_set_ui(tmp, 0);
+		mpz_set_ui(w, 1);
+
+		struct part *p_first = p;
+		while(p) {
+			lambda_S0j(tmp, p_first, ctx->l, p->i);
+			mpz_mul_ui(tmp, tmp, 2);
+
+	#ifdef DEBUG_PRINTF
+			printf("C base: "); mpz_out_str(stdout, 10, p->x_); printf("\n");
+			printf("C exp: "); mpz_out_str(stdout, 10, tmp); printf("\n");
+			printf("C mod: "); mpz_out_str(stdout, 10, ctx->n); printf("\n");
+	#endif /* DEBUG_PRINTF */
+
+			// TODO Insecure?
+			mpz_powm(tmp, p->x_, tmp, ctx->n);
+			mpz_mul(w, w, tmp);
+			mpz_mod(w, w, ctx->n);
+
+			p = p->combine_next;
+		}
+
+		mpz_fac_ui(tmp, ctx->l);
+		mpz_pow_ui(tmp, tmp, 2);
+		mpz_mul_ui(tmp, tmp, 4);
 
 		// TODO Insecure?
-		mpz_powm(tmp, p->x_, tmp, ctx->n);
-		mpz_mul(w, w, tmp);
-		mpz_mod(w, w, ctx->n);
+		mpz_gcdext(tmp, a, b, tmp, ctx->e);
+		ABORT_IF(mpz_cmp_ui(tmp, 1) != 0);
 
-		p = p->combine_next;
-	}
-
-	mpz_fac_ui(tmp, ctx->l);
-	mpz_pow_ui(tmp, tmp, 2);
-	mpz_mul_ui(tmp, tmp, 4);
-
-	// TODO Insecure?
-	mpz_gcdext(tmp, a, b, tmp, ctx->e);
-	ABORT_IF(mpz_cmp_ui(tmp, 1) != 0);
-
-	// TODO Insecure?
-	mpz_powm(out, w, a, ctx->n);
-	mpz_powm(tmp, in, b, ctx->n);
-	mpz_mul(out, out, tmp);
-	mpz_mod(out, out, ctx->n);
-
+		// TODO Insecure?
+		mpz_powm(out, w, a, ctx->n);
+		mpz_powm(tmp, in, b, ctx->n);
+		mpz_mul(out, out, tmp);
+		mpz_mod(out, out, ctx->n);
 #ifdef DEBUG_PRINTF
-	printf("C a: "); mpz_out_str(stdout, 10, a); printf("\n");
-	printf("C b: "); mpz_out_str(stdout, 10, b); printf("\n");
-	printf("C w: "); mpz_out_str(stdout, 10, w); printf("\n");
-	printf("C out: "); mpz_out_str(stdout, 10, out); printf("\n");
+		printf("C a: "); mpz_out_str(stdout, 10, a); printf("\n");
+		printf("C b: "); mpz_out_str(stdout, 10, b); printf("\n");
+		printf("C w: "); mpz_out_str(stdout, 10, w); printf("\n");
+		printf("C out: "); mpz_out_str(stdout, 10, out); printf("\n");
 #endif /* DEBUG_PRINTF */
 
-	retval = 0;
+		/*
+		 * Do a public operation on the result and compare to the encrypted
+		 * input value.
+		 * TODO Should this operation use an RSA mask?
+		 */
+
+		ABORT_IF_ERROR( trsa_op_pub(ctx, out, in_) );
+		if(mpz_cmp(in, in_) == 0) { // TODO Insecure?
+			retval = 0;
+#ifdef DEBUG_PRINTF
+			printf("C Accepted\n");
+#endif
+			break;
+#ifdef DEBUG_PRINTF
+		} else {
+			printf("C Rejected\n");
+#endif
+		}
+
+	} while( parts_permutation_next(pstate, &p) >= 0 );
 
 abort:
-	mpz_clears(a, b, w, tmp, NULL);
+	mpz_clears(a, b, w, tmp, in_, NULL);
 	parts_permutation_clear_state(pstate);
 
 	FINISH(0, .clear = CTX_PARTIALS);

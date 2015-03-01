@@ -188,6 +188,10 @@ int main(void) {
 			< 0)
 		FAIL("contribute_partial(...,5) failed");
 
+	const char *wrong_val = "5:ABCabc";
+	if(trsa_decrypt_contribute(decryptor, (const uint8_t*)wrong_val, strlen(wrong_val)) < 0)
+		FAIL("trsa_decrypt_contribute(wrong_val) failed");
+
 	if(trsa_decrypt_finish(decryptor, restored_session_key, sizeof(restored_session_key)) < 0)
 		FAIL("trsa_decrypt_finish() failed");
 
