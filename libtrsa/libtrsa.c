@@ -1019,10 +1019,10 @@ static void append_item(struct permutation_state *state, size_t pos)
 	state->count_selected++;
 }
 
-static void remove_item(struct permutation_state *state)
+static int remove_item(struct permutation_state *state)
 {
 	if(!state->last_set) {
-		return;
+		return -1;
 	}
 	size_t pos = state->last;
 #ifdef DEBUG_PRINTF
@@ -1035,6 +1035,8 @@ static void remove_item(struct permutation_state *state)
 	}
 	BITMAP_CLEAR(state->bitmap, state->items[pos].p->i);
 	state->count_selected--;
+	state->pos = pos+1;
+	return 0;
 }
 
 int parts_permutation_next(struct permutation_state *state, struct part **out)
@@ -1042,6 +1044,8 @@ int parts_permutation_next(struct permutation_state *state, struct part **out)
 	if(!state || !out) {
 		return -1;
 	}
+
+	remove_item(state);
 
 	int accept = 0;
 	while(!accept) {
@@ -1054,7 +1058,7 @@ int parts_permutation_next(struct permutation_state *state, struct part **out)
 
 #ifdef DEBUG_PRINTF
 			{
-				printf("P permutation now:");
+				printf("P permutation now (pos %zi):", state->pos);
 				size_t tmp = state->last;
 				int tmp_set = state->last_set;
 				while(tmp_set) {
@@ -1067,14 +1071,17 @@ int parts_permutation_next(struct permutation_state *state, struct part **out)
 #endif
 		}
 		accept = state->count_unique == state->n;
-		if(!accept) {
-			/* Remove last item and retry by appending one further down. If last item
-			 * in origin list was tried: try second to last. */
-			remove_item(state);
+		if(accept) {
+			break;
+		}
+		/* Remove last item and retry by appending one further down. If last item
+		 * in origin list was tried: back up. */
+		if( remove_item(state) < 0) {
+			break;
 		}
 	}
 
-	{
+	if(accept) {
 		*out = NULL;
 		size_t tmp = state->last;
 		int tmp_set = state->last_set;
@@ -1086,7 +1093,11 @@ int parts_permutation_next(struct permutation_state *state, struct part **out)
 		}
 	}
 
-	return 0;
+	if(accept) {
+		return 0;
+	} else {
+		return -1;
+	}
 }
 
 int parts_permutation_first(struct part *head, int n, size_t part_count,
