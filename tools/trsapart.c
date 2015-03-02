@@ -23,9 +23,9 @@ int main(int argc, char **argv) {
 	trsa_ctx part = NULL;
 	char *in_name = NULL, *server = NULL;
 	int conn = -1, r;
-	struct addrinfo *addr, *a, hints;
+	struct addrinfo *addr = NULL, *a, hints;
 	uint8_t *b = NULL, c[100], *p = NULL;
-	size_t b_length = 0, p_length = NULL;
+	size_t b_length = 0, p_length = 0;
 	buffer_t buffer = NULL;
 
 

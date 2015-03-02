@@ -69,7 +69,7 @@ int main(int argc, char **argv) {
 	int srvsock = -1;
 	struct sockaddr_in addr;
 	uint8_t *b = NULL, *s =NULL, *c = NULL;
-	size_t b_length = 0, c_length = NULL;
+	size_t b_length = 0, c_length = 0;
 
 
 	if(argc < 3) {
